@@ -2,8 +2,8 @@ import type { DeskSettings, RefreshMode } from "./types";
 
 export const SETTINGS_KEY = "arcv.desk.settings";
 
-export const MIN_CONTINUOUS_SEC = 15;
-export const MAX_CONTINUOUS_SEC = 120;
+export const MIN_CONTINUOUS_SEC = 1;
+export const MAX_CONTINUOUS_SEC = 3600;
 export const DEFAULT_CONTINUOUS_SEC = 30;
 
 export const CONTINUOUS_PRESETS = [15, 30, 45, 60] as const;

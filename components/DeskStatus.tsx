@@ -1,12 +1,12 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { HintLabel } from "@/components/InfoTip";
-import { pricesAsOf } from "@/lib/session";
+import { formatSecondsLabel } from "@/lib/format";
 import type { SessionInfo } from "@/lib/types";
 
 const SESSION_VALUE =
-  /((?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)(?:[–-](?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday))?(?:\s+\d{1,2}:\d{2}\s*[ap]m)?|\d{1,2}:\d{2}\s*[ap]m|\d{1,2}[–-]\d{1,2}\s*[ap]m)/gi;
+  /((?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)(?:[–-](?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday))?(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*[ap]m)?|\d{1,2}:\d{2}(?::\d{2})?\s*[ap]m|\d{1,2}[–-]\d{1,2}\s*[ap]m)/gi;
 
 function Strong({ children }: { children: ReactNode }) {
   return <strong className="font-semibold">{children}</strong>;
@@ -27,16 +27,9 @@ function emphasizeHours(hours: string) {
   return nodes;
 }
 
-function pricesAsOfLine(runAt: string) {
-  const text = pricesAsOf(runAt);
-  const prefix = "Prices as of ";
-  if (!text.startsWith(prefix)) return text;
-  return (
-    <>
-      {prefix}
-      <Strong>{text.slice(prefix.length)}</Strong>
-    </>
-  );
+function snapshotClock(runAt: string) {
+  const match = runAt.match(/(\d{2}:\d{2}:\d{2})\s*IST/i);
+  return match ? `${match[1]} IST` : null;
 }
 
 function StatusChip({ loading, open }: { loading: boolean; open: boolean }) {
@@ -50,6 +43,24 @@ function StatusChip({ loading, open }: { loading: boolean; open: boolean }) {
   );
 }
 
+function useElapsedLabel(fetchedAt: number | null) {
+  const [elapsed, setElapsed] = useState<string | null>(null);
+  useEffect(() => {
+    if (fetchedAt == null) {
+      setElapsed(null);
+      return;
+    }
+    const origin = fetchedAt;
+    function tick() {
+      setElapsed(formatSecondsLabel((Date.now() - origin) / 1000));
+    }
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [fetchedAt]);
+  return elapsed;
+}
+
 export function DeskStatus({
   session,
   fallbackLabel,
@@ -57,6 +68,8 @@ export function DeskStatus({
   loading,
   showRun,
   onRefresh,
+  intervalSec = 0,
+  fetchedAt = null,
 }: {
   session: SessionInfo | null;
   fallbackLabel: string;
@@ -64,8 +77,13 @@ export function DeskStatus({
   loading: boolean;
   showRun: boolean;
   onRefresh: () => void;
+  intervalSec?: number;
+  fetchedAt?: number | null;
 }) {
   const open = session?.open ?? false;
+  const clock = runAt ? snapshotClock(runAt) : null;
+  const intervalLabel = intervalSec > 0 ? formatSecondsLabel(intervalSec) : null;
+  const elapsed = useElapsedLabel(open ? fetchedAt : null);
 
   return (
     <div className="flex flex-wrap items-start gap-x-4 gap-y-2 border-b border-[var(--line)] pb-3">
@@ -76,14 +94,29 @@ export function DeskStatus({
               {session ? session.label : fallbackLabel}
             </span>
           </HintLabel>
-          {(session || loading) && <StatusChip loading={loading} open={open} />}
+          {(session || loading) && (
+            <span className="inline-flex shrink-0 items-center gap-2">
+              <StatusChip loading={loading} open={open} />
+              {open && clock ? (
+                <span className="font-mono text-[11px] text-[var(--muted)]">refreshed {clock}</span>
+              ) : null}
+            </span>
+          )}
         </div>
         {session && (
           <p className="desk-status-hours">{emphasizeHours(session.hours)}</p>
         )}
-        {open && (
-          <p className="desk-status-asof">{runAt ? pricesAsOfLine(runAt) : "\u00a0"}</p>
-        )}
+        {open && (intervalLabel || elapsed) ? (
+          <p className="desk-status-asof">
+            {intervalLabel ? (
+              <>
+                interval <Strong>{intervalLabel}</Strong>
+              </>
+            ) : null}
+            {intervalLabel && elapsed ? " · " : null}
+            {elapsed ? <Strong>{elapsed}</Strong> : null}
+          </p>
+        ) : null}
       </div>
       {showRun && (
         <button

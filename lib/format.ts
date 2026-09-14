@@ -39,6 +39,72 @@ export function metalUsdDigits(code: MetalCode) {
   return 2;
 }
 
+const ZONE_SUFFIX: Record<string, string> = {
+  "Asia/Kolkata": "IST",
+  "America/Chicago": "CT",
+  "America/New_York": "ET",
+};
+
+export function zoneSuffix(timeZone: string) {
+  return ZONE_SUFFIX[timeZone] ?? timeZone;
+}
+
+/** Clock parts in a named zone — no `toLocaleString`, so SSR/client stamps stay stable. */
+export function formatClock(date: Date, timeZone: string) {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const map = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
+  const clock = `${map.hour}:${map.minute}:${map.second}`;
+  const day = `${map.day} ${map.month} ${map.year}`;
+  return {
+    weekday: map.weekday,
+    date: day,
+    clock,
+    stamp: `${map.weekday}, ${day}, ${clock}`,
+    dated: `${day}, ${clock}`,
+  };
+}
+
+/** Duration as HH:MM:SS (15 → 00:00:15). Prefer `formatSecondsLabel` for refresh/elapsed. */
+export function formatHms(totalSeconds: number) {
+  const n = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = n % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+/** Duration in plain seconds: 5 → "5 seconds", 1 → "1 second". */
+export function formatSecondsLabel(totalSeconds: number) {
+  const n = Math.max(0, Math.floor(Number.isFinite(totalSeconds) ? totalSeconds : 0));
+  return n === 1 ? "1 second" : `${n} seconds`;
+}
+
+export function formatIstStamp(date: Date) {
+  return `${formatClock(date, "Asia/Kolkata").stamp} IST`;
+}
+
+export function formatCtStamp(date: Date) {
+  return `${formatClock(date, "America/Chicago").stamp} CT`;
+}
+
+/** Last print: India clock and the exchange print of the same instant. */
+export function formatLastTradeStamp(unixSec: number, exchangeTimeZone = "America/New_York") {
+  const date = new Date(unixSec * 1000);
+  const ist = formatClock(date, "Asia/Kolkata");
+  const src = formatClock(date, exchangeTimeZone);
+  return `${ist.dated} IST · ${src.dated} ${zoneSuffix(exchangeTimeZone)}`;
+}
+
 export function money(n: number | null | undefined, ccy: QuoteCurrency = "INR") {
   return ccy === "USD" ? usd(n) : inr(n);
 }

@@ -16,6 +16,7 @@ export type YahooQuote = {
   closeCount?: number;
   smaFastWindow?: number;
   smaSlowWindow?: number;
+  exchangeTimezoneName?: string;
 };
 
 export type UsdInrQuote = {
@@ -33,11 +34,15 @@ type ChartMeta = {
   twoHundredDayAverage?: number;
   chartPreviousClose?: number;
   previousClose?: number;
+  regularMarketPreviousClose?: number;
+  regularMarketOpen?: number;
   regularMarketDayHigh?: number;
   regularMarketDayLow?: number;
   regularMarketChange?: number;
   regularMarketChangePercent?: number;
   gmtoffset?: number;
+  exchangeTimezoneName?: string;
+  timezone?: string;
   currentTradingPeriod?: unknown;
 };
 
@@ -46,6 +51,7 @@ type ChartResult = {
   timestamp?: number[];
   indicators?: {
     quote?: Array<{
+      open?: Array<number | null>;
       close?: Array<number | null>;
       high?: Array<number | null>;
       low?: Array<number | null>;
@@ -98,12 +104,19 @@ type LastPrint = {
 type BarPrint = {
   price: number;
   time?: number;
+  index: number;
 };
 
 const USDINR_SYMBOLS = ["USDINR=X", "INR=X"] as const;
 const USDINR_CACHE_MS = 6 * 60 * 60 * 1000;
-const INTRADAY_BAR_SEC = 5 * 60;
+const BAR_SEC_1M = 60;
+const BAR_SEC_5M = 5 * 60;
 let cachedUsdInr: { rate: number; at: number } | null = null;
+
+export type QuoteFetchOptions = {
+  /** Prefer 1-minute bars for last + last-trade time (COMEX metals). Falls back to 5m. */
+  prefer1m?: boolean;
+};
 
 function yahooHeaders() {
   const headers: Record<string, string> = {
@@ -128,7 +141,7 @@ function lastBar(
   for (let i = values.length - 1; i >= 0; i--) {
     const v = values[i];
     if (v != null && Number.isFinite(v) && v > 0) {
-      return { price: v, time: timestamps?.[i] };
+      return { price: v, time: timestamps?.[i], index: i };
     }
   }
   return null;
@@ -172,46 +185,77 @@ function rangeOnExchangeDay(
   return { high, low };
 }
 
-/** Previous session close — never long-range chartPreviousClose (that is the first bar of the chart). */
+function barOpen(
+  opens: Array<number | null | undefined> | undefined,
+  index: number | undefined,
+) {
+  if (opens == null || index == null) return undefined;
+  const v = opens[index];
+  if (v != null && Number.isFinite(v) && v > 0) return v;
+  return undefined;
+}
+
+/**
+ * COMEX board Close during Globex is prior settlement. Yahoo’s previous daily
+ * close is often the prior session last (e.g. 4408.90); today’s daily open is
+ * often the settlement boards print (e.g. 4375). Never use 1y chartPreviousClose
+ * (first bar of a long-range chart).
+ */
 function pickPreviousClose(opts: {
-  sessionPrev?: number;
+  dailyPrev?: number;
+  shortChartPrev?: number;
+  quotePrev?: number;
+  todayOpen?: number;
   closes: number[];
   daily: BarPrint | null;
   pickedTime?: number;
   gmtOffset: number;
 }) {
-  const { sessionPrev, closes, daily, pickedTime, gmtOffset } = opts;
-  if (sessionPrev != null) return sessionPrev;
+  const { dailyPrev, shortChartPrev, quotePrev, todayOpen, closes, daily, pickedTime, gmtOffset } = opts;
   const dailyIsSameSession =
     daily?.time != null && pickedTime != null && sameExchangeDay(daily.time, pickedTime, gmtOffset);
-  if (dailyIsSameSession) return closes[closes.length - 2];
-  return closes[closes.length - 1];
+  const prevCompleted = dailyIsSameSession && closes.length >= 2 ? closes[closes.length - 2] : undefined;
+  const lastCompleted = !dailyIsSameSession && closes.length >= 1 ? closes[closes.length - 1] : undefined;
+  if (dailyIsSameSession && todayOpen != null) return todayOpen;
+  if (prevCompleted != null) return prevCompleted;
+  if (lastCompleted != null) return lastCompleted;
+  return firstPositive([todayOpen, dailyPrev, shortChartPrev, quotePrev]);
 }
 
-function asOfForIntraday(barTs?: number, metaTs?: number) {
+function asOfForIntraday(barTs?: number, metaTs?: number, barSec = BAR_SEC_5M) {
   if (barTs == null) return metaTs;
-  if (metaTs != null && metaTs >= barTs && metaTs < barTs + INTRADAY_BAR_SEC) return metaTs;
+  if (metaTs != null && metaTs >= barTs && metaTs <= barTs + barSec) return metaTs;
   return barTs;
 }
 
-/** Prefer an actual chart last trade over Yahoo's often-stale meta.regularMarketPrice. */
+function printNewer(a?: number, b?: number) {
+  return (a ?? 0) > (b ?? 0);
+}
+
+/** Newest last among 1m/5m bars and meta — chart bars can lag meta, and meta can lag bars. */
 function pickLastPrint(opts: {
   daily: BarPrint | null;
   intraday: BarPrint | null;
   metaPrice?: number;
   metaTime?: number;
   gmtOffset: number;
+  barSec: number;
 }): LastPrint | null {
-  const { daily, intraday, metaPrice, metaTime, gmtOffset } = opts;
+  const { daily, intraday, metaPrice, metaTime, gmtOffset, barSec } = opts;
   const meta =
     metaPrice != null && Number.isFinite(metaPrice) && metaPrice > 0
       ? { price: metaPrice, time: metaTime }
       : null;
 
   if (intraday) {
+    const metaIsNewerLast =
+      meta?.time != null && intraday.time != null && meta.time > intraday.time + barSec;
+    if (metaIsNewerLast && meta) {
+      return { price: meta.price, time: meta.time, field: "regular_market" };
+    }
     return {
       price: intraday.price,
-      time: asOfForIntraday(intraday.time, metaTime),
+      time: asOfForIntraday(intraday.time, metaTime, barSec),
       field: "intraday_close",
     };
   }
@@ -251,8 +295,8 @@ function logLastDivergence(
     asOf: picked.time,
     chartDailyClose: daily?.price ?? null,
     chartDailyTs: daily?.time ?? null,
-    chart5mClose: intraday?.price ?? null,
-    chart5mTs: intraday?.time ?? null,
+    chartIntradayClose: intraday?.price ?? null,
+    chartIntradayTs: intraday?.time ?? null,
     regularMarketPrice: metaPrice,
     regularMarketTime: metaTime,
     quoteLast: null,
@@ -287,14 +331,37 @@ async function fetchChartJson(
   return json.chart?.result?.[0] ?? null;
 }
 
+async function fetchIntradayChart(symbol: string, prefer1m: boolean) {
+  if (prefer1m) {
+    const [oneMin, oneMin5d] = await Promise.all([
+      fetchChartJson(symbol, "1d", "1m"),
+      fetchChartJson(symbol, "5d", "1m"),
+    ]);
+    const oneMinBar = lastBar(oneMin?.indicators?.quote?.[0]?.close, oneMin?.timestamp);
+    const fiveDayBar = lastBar(oneMin5d?.indicators?.quote?.[0]?.close, oneMin5d?.timestamp);
+    const fiveDayNewer = fiveDayBar && (!oneMinBar || printNewer(fiveDayBar.time, oneMinBar.time));
+    if (fiveDayNewer) return { result: oneMin5d, barSec: BAR_SEC_1M, range: "5d" as const };
+    if (oneMinBar) return { result: oneMin, barSec: BAR_SEC_1M, range: "1d" as const };
+    const fiveMin = await fetchChartJson(symbol, "5d", "5m");
+    if (lastBar(fiveMin?.indicators?.quote?.[0]?.close, fiveMin?.timestamp)) {
+      return { result: fiveMin, barSec: BAR_SEC_5M, range: "5d" as const };
+    }
+    return { result: oneMin5d ?? oneMin ?? fiveMin, barSec: BAR_SEC_1M, range: "5d" as const };
+  }
+  const fiveMin = await fetchChartJson(symbol, "5d", "5m");
+  return { result: fiveMin, barSec: BAR_SEC_5M, range: "5d" as const };
+}
+
 async function fetchChart(
   symbol: string,
   periods: { smaFast: number; smaSlow: number },
+  opts: QuoteFetchOptions = {},
 ): Promise<YahooQuote | null> {
   const range = periods.smaSlow > 220 ? "2y" : "1y";
-  const [dailyResult, intradayResult] = await Promise.all([
+  const [dailyResult, shortDaily, intradayPack] = await Promise.all([
     fetchChartJson(symbol, range, "1d"),
-    fetchChartJson(symbol, "5d", "5m"),
+    opts.prefer1m ? fetchChartJson(symbol, "5d", "1d") : Promise.resolve(null),
+    fetchIntradayChart(symbol, Boolean(opts.prefer1m)),
   ]);
   if (!dailyResult) return fetchQuoteSnapshot(symbol);
 
@@ -305,15 +372,26 @@ async function fetchChart(
   const closes = numericSeries(closeSeries);
   const highs = dailyResult.indicators?.quote?.[0]?.high ?? [];
   const lows = dailyResult.indicators?.quote?.[0]?.low ?? [];
+  const opens = dailyResult.indicators?.quote?.[0]?.open ?? [];
   const daily = lastBar(closeSeries, dailyResult.timestamp);
   const lastHigh = [...highs].reverse().find((v) => v != null);
   const lastLow = [...lows].reverse().find((v) => v != null);
 
+  const intradayResult = intradayPack.result;
+  const barSec = intradayPack.barSec;
   const intraQuote = intradayResult?.indicators?.quote?.[0];
   const intraday = lastBar(intraQuote?.close, intradayResult?.timestamp);
   const gmtOffset = dailyResult.meta?.gmtoffset ?? intradayResult?.meta?.gmtoffset ?? 0;
-  const metaPrice = dailyResult.meta?.regularMarketPrice ?? intradayResult?.meta?.regularMarketPrice;
-  const metaTime = dailyResult.meta?.regularMarketTime ?? intradayResult?.meta?.regularMarketTime;
+  const intraMetaNewer = printNewer(
+    intradayResult?.meta?.regularMarketTime,
+    dailyResult.meta?.regularMarketTime,
+  );
+  const metaPrice = intraMetaNewer
+    ? (intradayResult?.meta?.regularMarketPrice ?? dailyResult.meta?.regularMarketPrice)
+    : (dailyResult.meta?.regularMarketPrice ?? intradayResult?.meta?.regularMarketPrice);
+  const metaTime = intraMetaNewer
+    ? (intradayResult?.meta?.regularMarketTime ?? dailyResult.meta?.regularMarketTime)
+    : (dailyResult.meta?.regularMarketTime ?? intradayResult?.meta?.regularMarketTime);
 
   const picked = pickLastPrint({
     daily,
@@ -321,6 +399,7 @@ async function fetchChart(
     metaPrice,
     metaTime,
     gmtOffset,
+    barSec,
   });
   if (!picked) return fetchQuoteSnapshot(symbol);
   logLastDivergence(symbol, picked, daily, intraday, metaPrice, metaTime);
@@ -332,16 +411,58 @@ async function fetchChart(
     picked.time ?? metaTime,
     gmtOffset,
   );
+  const shortOpens = shortDaily?.indicators?.quote?.[0]?.open ?? [];
+  const shortCloses = numericSeries(shortDaily?.indicators?.quote?.[0]?.close);
+  const shortDailyBar = lastBar(shortDaily?.indicators?.quote?.[0]?.close, shortDaily?.timestamp);
+  const todayOpen = firstPositive([
+    barOpen(opens, daily?.index),
+    barOpen(shortOpens, shortDailyBar?.index),
+    shortDaily?.meta?.regularMarketOpen,
+    dailyResult.meta?.regularMarketOpen,
+    intradayResult?.meta?.regularMarketOpen,
+  ]);
+  const shortChartPrev = firstPositive([
+    shortDaily?.meta?.chartPreviousClose,
+    shortDaily?.meta?.previousClose,
+    intradayResult?.meta?.previousClose,
+    intradayPack.range === "1d" ? intradayResult?.meta?.chartPreviousClose : undefined,
+  ]);
+  const prevCompleted =
+    daily &&
+    picked.time != null &&
+    sameExchangeDay(daily.time, picked.time, gmtOffset) &&
+    closes.length >= 2
+      ? closes[closes.length - 2]
+      : shortCloses.length >= 2
+        ? shortCloses[shortCloses.length - 2]
+        : undefined;
   const prevClose = pickPreviousClose({
-    sessionPrev: firstPositive([
-      intradayResult?.meta?.previousClose,
-      dailyResult.meta?.previousClose,
-    ]),
+    dailyPrev: dailyResult.meta?.previousClose ?? shortDaily?.meta?.previousClose,
+    shortChartPrev,
+    quotePrev: dailyResult.meta?.regularMarketPreviousClose ?? shortDaily?.meta?.regularMarketPreviousClose,
+    todayOpen,
     closes,
     daily,
     pickedTime: picked.time,
     gmtOffset,
   });
+  if (opts.prefer1m) {
+    console.info(
+      "[arcverdict:close]",
+      JSON.stringify({
+        symbol,
+        picked: prevClose,
+        todayOpen: todayOpen ?? null,
+        prevCompletedDailyClose: prevCompleted ?? null,
+        lastDailyClose: daily?.price ?? null,
+        chartPreviousClose5d: shortDaily?.meta?.chartPreviousClose ?? null,
+        chartPreviousClose1m: intradayResult?.meta?.chartPreviousClose ?? null,
+        metaPreviousClose: dailyResult.meta?.previousClose ?? intradayResult?.meta?.previousClose ?? null,
+        lastUsd: picked.price,
+        asOf: picked.time ?? null,
+      }),
+    );
+  }
   const dayHigh = firstPositive([
     intradayResult?.meta?.regularMarketDayHigh,
     dailyResult.meta?.regularMarketDayHigh,
@@ -376,6 +497,8 @@ async function fetchChart(
     closeCount: closes.length,
     smaFastWindow: fast?.window,
     smaSlowWindow: slow?.window,
+    exchangeTimezoneName:
+      dailyResult.meta?.exchangeTimezoneName ?? intradayResult?.meta?.exchangeTimezoneName,
   };
 }
 
@@ -456,8 +579,11 @@ function cachedUsdInrQuote(): UsdInrQuote | null {
   return { rate: cachedUsdInr.rate, source: "cached" };
 }
 
-/** USDINR is fetched outside the metals/ETF pool so a 429 on FX does not blank INR levels. */
+/** USDINR is fetched outside the metals/ETF pool so a 429 on FX does not blank INR levels.
+ *  Warm FX cache is reused so COMEX last is not delayed by extra chart calls. */
 export async function fetchUsdInr(): Promise<UsdInrQuote | null> {
+  const cached = cachedUsdInrQuote();
+  if (cached) return cached;
   for (const symbol of USDINR_SYMBOLS) {
     const q = await fetchChart(symbol, { smaFast: 5, smaSlow: 20 });
     const px = q?.regularMarketPrice;
@@ -467,7 +593,7 @@ export async function fetchUsdInr(): Promise<UsdInrQuote | null> {
     const px = await fetchQuotePrice(symbol);
     if (px != null) return rememberUsdInr(px);
   }
-  return cachedUsdInrQuote();
+  return null;
 }
 
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -487,8 +613,9 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
 export async function fetchYahooQuotes(
   symbols: string[],
   periods = { smaFast: 50, smaSlow: 200 },
+  opts: QuoteFetchOptions = {},
 ): Promise<YahooQuote[]> {
-  const rows = await mapPool(symbols, env.scanConcurrency, (symbol) => fetchChart(symbol, periods));
+  const rows = await mapPool(symbols, env.scanConcurrency, (symbol) => fetchChart(symbol, periods, opts));
   return rows.filter((row): row is YahooQuote => row != null);
 }
 

@@ -152,9 +152,18 @@ export const TIPS = {
   },
   change: {
     title: "Change",
-    meaning: "Session percent change versus the previous close. Green is up on the day; red is down.",
+    meaning:
+      "Last minus Close (previous settlement), as a dollar amount on COMEX and a percent on both columns. Green is up versus that close; red is down.",
     act: "Use it as tape context next to the action — a green day does not by itself mean BUY.",
     avoid: "Do not trade on the day’s change alone. The action is driven by trend versus the fast and slow averages.",
+  },
+  close: {
+    title: "Close",
+    meaning:
+      "COMEX close (previous settlement), not last trade. During the Globex session this is today’s daily open when that is the board settlement; otherwise the previous completed daily close. It is not Yahoo’s session last from an earlier day.",
+    act: "Read Change as last minus this Close. High and low stay this session’s range.",
+    avoid:
+      "Do not treat Close as the live last print. A prior session last (for example 4408.90) is not the Close when the board shows settlement near today’s open.",
   },
 } satisfies Record<string, TipBody>;
 

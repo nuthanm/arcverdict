@@ -2,6 +2,7 @@ import { engineParams } from "@/lib/api";
 import { COMEX_LAST_MISSING, NSE_NOT_IN_SNAPSHOT } from "@/lib/copy";
 import { classify } from "@/lib/engine";
 import { env } from "@/lib/env";
+import { formatLastTradeStamp } from "@/lib/format";
 import { executablePrices } from "@/lib/prices";
 import { comexSession, formatIst } from "@/lib/session";
 import type { EtfQuote, MetalQuote, QuoteCurrency } from "@/lib/types";
@@ -10,6 +11,7 @@ import { fetchUsdInr, fetchYahooQuotes, nseSymbol, quoteBySymbol } from "@/lib/y
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: Request) {
   const session = comexSession();
@@ -27,14 +29,17 @@ export async function GET(request: Request) {
   try {
     const params = engineParams(new URL(request.url).searchParams);
     const etfTickers = [...new Set(Object.values(METAL_ETFS).flat().map((e) => nseSymbol(e.ticker)))];
-    const symbols = [...METAL_SPECS.map((m) => m.yahoo), ...etfTickers];
-    const [quotes, fx] = await Promise.all([
-      fetchYahooQuotes(symbols, {
-        smaFast: params.smaFast,
-        smaSlow: params.smaSlow,
-      }),
+    const periods = { smaFast: params.smaFast, smaSlow: params.smaSlow };
+    const [metalQuotes, etfQuotes, fx] = await Promise.all([
+      fetchYahooQuotes(
+        METAL_SPECS.map((m) => m.yahoo),
+        periods,
+        { prefer1m: true },
+      ),
+      fetchYahooQuotes(etfTickers, periods),
       fetchUsdInr(),
     ]);
+    const quotes = [...metalQuotes, ...etfQuotes];
     const usdInr = fx?.rate ?? null;
     const usdInrSource = fx?.source ?? null;
     const runAt = formatIst();
@@ -153,7 +158,10 @@ export async function GET(request: Request) {
         why: decision.why,
         stop: decision.stop,
         conviction: decision.conviction,
-        asOf: q?.regularMarketTime != null ? formatIst(new Date(q.regularMarketTime * 1000)) : runAt,
+        asOf:
+          q?.regularMarketTime != null
+            ? formatLastTradeStamp(q.regularMarketTime, q.exchangeTimezoneName ?? "America/New_York")
+            : null,
         etfs,
       };
     });

@@ -50,7 +50,7 @@ const ACTIONS: Action[] = ["BUY", "SELL", "HOLD", "WATCH", "NONE"];
 
 export function EquitiesDesk() {
   const { settings, ready } = useDeskSettings();
-  const { session, data, loading, error, loadBook, showRun } = useLiveDesk<ScanResponse>({
+  const { session, data, loading, error, loadBook, showRun, fetchedAt, intervalSec } = useLiveDesk<ScanResponse>({
     market: "nse",
     path: "/api/scan",
     settings,
@@ -101,6 +101,8 @@ export function EquitiesDesk() {
         loading={loading}
         showRun={showRun}
         onRefresh={loadBook}
+        intervalSec={intervalSec}
+        fetchedAt={fetchedAt}
       />
 
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}

@@ -3,7 +3,7 @@
 import { ActionBadge } from "@/components/ActionBadge";
 import { DeskStatus } from "@/components/DeskStatus";
 import { FillNowCell } from "@/components/FillNowCell";
-import { HintCorner } from "@/components/InfoTip";
+import { HintCorner, HintLabel } from "@/components/InfoTip";
 import { ConvictionChangeTiles, HintStat, HintTh } from "@/components/HintStat";
 import { InstructionPanel } from "@/components/InstructionPanel";
 import { MarketClosed } from "@/components/MarketClosed";
@@ -54,7 +54,7 @@ type MetalsResponse = {
 
 export function MetalDesk({ code }: { code: MetalCode }) {
   const { settings, ready } = useDeskSettings();
-  const { session, data, loading, error, loadBook, showRun } = useLiveDesk<MetalsResponse>({
+  const { session, data, loading, error, loadBook, showRun, fetchedAt, intervalSec } = useLiveDesk<MetalsResponse>({
     market: "metals",
     path: "/api/metals",
     settings,
@@ -70,7 +70,6 @@ export function MetalDesk({ code }: { code: MetalCode }) {
     ? { ...session, label: metalSessionLabel(code, session.open) }
     : session;
   const listedEtfs = metal?.etfs ?? [];
-  const snapshot = metal?.asOf ?? null;
 
   return (
     <div className="space-y-4">
@@ -81,6 +80,8 @@ export function MetalDesk({ code }: { code: MetalCode }) {
         loading={loading}
         showRun={showRun}
         onRefresh={loadBook}
+        intervalSec={intervalSec}
+        fetchedAt={fetchedAt}
       />
 
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}
@@ -118,9 +119,6 @@ export function MetalDesk({ code }: { code: MetalCode }) {
                         {inr(metal.lastInr)} / {inrUnit(metal.unit)}
                       </span>
                     </p>
-                    {snapshot ? (
-                      <p className="mt-0.5 text-xs text-[var(--muted)]">{pricesAsOf(snapshot)}</p>
-                    ) : null}
                   </div>
                 </div>
 
@@ -264,7 +262,7 @@ function MetalQuoteBoard({ metal }: { metal: MetalQuote }) {
     metal.prevClose != null && metal.lastUsd != null && metal.lastInr != null && metal.lastUsd !== 0
       ? (metal.lastInr / metal.lastUsd) * metal.prevClose
       : null;
-  const lastTrade = metal.asOf ? pricesAsOf(metal.asOf).replace(/^Prices as of\s+/i, "") : "—";
+  const lastTrade = metal.asOf ?? "—";
 
   return (
     <div className="mt-4 overflow-x-auto border border-[var(--line)] bg-[var(--wash)]">
@@ -299,7 +297,9 @@ function MetalQuoteBoard({ metal }: { metal: MetalQuote }) {
             </td>
           </tr>
           <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Close</th>
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">
+              <HintLabel tipKey="close">Close</HintLabel>
+            </th>
             <td className="px-3 py-1.5 text-right font-mono">{usd(metal.prevClose, digits)}</td>
             <td className="px-3 py-1.5 text-right font-mono">{inr(prevCloseInr)}</td>
           </tr>
