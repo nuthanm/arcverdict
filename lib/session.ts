@@ -1,3 +1,4 @@
+import { formatCtStamp, formatIstStamp } from "./format";
 import type { SessionInfo } from "./types";
 
 function partsInZone(timeZone: "Asia/Kolkata" | "America/Chicago", now = new Date()) {
@@ -22,21 +23,6 @@ function isNseWeekday(weekday: string) {
   return weekday !== "Sat" && weekday !== "Sun";
 }
 
-function formatStamp(now: Date, timeZone: "Asia/Kolkata" | "America/Chicago", suffix: string) {
-  return (
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone,
-      weekday: "short",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    }).format(now) + ` ${suffix}`
-  );
-}
-
 function nextNseWeekdayOpen(now: Date, openMinutes: number) {
   const cursor = new Date(now.getTime());
   for (let i = 0; i < 8; i++) {
@@ -46,7 +32,7 @@ function nextNseWeekdayOpen(now: Date, openMinutes: number) {
     if (i === 0 && minutes >= openMinutes) continue;
     const hour = String(Math.floor(openMinutes / 60)).padStart(2, "0");
     const min = String(openMinutes % 60).padStart(2, "0");
-    return `${ymd} ${hour}:${min} IST`;
+    return `${ymd} ${hour}:${min}:00 IST`;
   }
   return null;
 }
@@ -66,7 +52,7 @@ function nextComexOpen(now: Date) {
   const { weekday, minutes, ymd } = partsInZone("America/Chicago", now);
   const haltStart = 16 * 60;
   const haltEnd = 17 * 60;
-  const stamp = (day: string) => `${day} 17:00 CT`;
+  const stamp = (day: string) => `${day} 17:00:00 CT`;
 
   if (weekday !== "Sat" && weekday !== "Fri" && weekday !== "Sun" && minutes >= haltStart && minutes < haltEnd) {
     return stamp(ymd);
@@ -114,22 +100,17 @@ export function mcxSession(now = new Date()): SessionInfo {
 }
 
 export function formatIst(now = new Date()) {
-  return formatStamp(now, "Asia/Kolkata", "IST");
+  return formatIstStamp(now);
 }
 
 export function formatCt(now = new Date()) {
-  return formatStamp(now, "America/Chicago", "CT");
+  return formatCtStamp(now);
 }
 
-/** Turn a snapshot stamp into “Prices as of …”, including leftover 24-hour clocks. */
+/** Turn a snapshot stamp into “Prices as of …”. Stamps already include HH:MM:SS. */
 export function pricesAsOf(runAt: string) {
-  if (/\d{1,2}:\d{2}\s*[ap]m/i.test(runAt)) return `Prices as of ${runAt}`;
-  const friendly = runAt.replace(/(\d{1,2}):(\d{2})\s*(IST|CT)\b/i, (_, hour, minute, zone) => {
-    const h = Number(hour);
-    const suffix = h >= 12 ? "pm" : "am";
-    return `${h % 12 || 12}:${minute} ${suffix} ${zone.toUpperCase()}`;
-  });
-  return `Prices as of ${friendly}`;
+  if (/^Prices as of\s+/i.test(runAt)) return runAt;
+  return `Prices as of ${runAt}`;
 }
 
 export function metalSessionLabel(code: "gold" | "silver" | "copper", open: boolean) {

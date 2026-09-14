@@ -22,8 +22,11 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${sans.variable} ${mono.variable} h-full`}>
-      <body className="min-h-full bg-[var(--background)] font-sans text-[var(--ink)] antialiased">
+    <html lang="en" className={`${sans.variable} ${mono.variable} h-full`} suppressHydrationWarning>
+      <body
+        className="min-h-full bg-[var(--background)] font-sans text-[var(--ink)] antialiased"
+        suppressHydrationWarning
+      >
         <Shell>{children}</Shell>
       </body>
     </html>

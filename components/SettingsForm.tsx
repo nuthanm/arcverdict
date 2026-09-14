@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { InfoTip } from "@/components/InfoTip";
+import { formatSecondsLabel } from "@/lib/format";
 import {
   CONTINUOUS_PRESETS,
   DEFAULT_SETTINGS,
@@ -66,9 +67,7 @@ export function SettingsForm() {
       {draft.refreshMode === "continuous" && (
         <fieldset className="space-y-3">
           <legend className="text-sm font-medium text-[var(--ink)]">Continuous interval</legend>
-          <p className="text-xs text-[var(--muted)]">
-            How often the open-market book refreshes. Minimum {MIN_CONTINUOUS_SEC} seconds so the feed is not overloaded.
-          </p>
+          <p className="text-xs text-[var(--muted)]">How often the open-market book refreshes.</p>
           <div className="flex flex-wrap gap-2">
             {CONTINUOUS_PRESETS.map((seconds) => (
               <button
@@ -87,16 +86,28 @@ export function SettingsForm() {
             ))}
           </div>
           <label className="block text-sm">
-            <span className="mb-1 block text-[var(--muted)]">Seconds ({MIN_CONTINUOUS_SEC}–{MAX_CONTINUOUS_SEC})</span>
-            <input
-              type="number"
-              min={MIN_CONTINUOUS_SEC}
-              max={MAX_CONTINUOUS_SEC}
-              step={1}
-              className="w-full max-w-[10rem] border border-[var(--line)] bg-white px-3 py-2"
-              value={draft.continuousSeconds}
-              onChange={(e) => update("continuousSeconds", Number(e.target.value))}
-            />
+            <span className="mb-1 block text-[var(--muted)]">Custom interval (seconds)</span>
+            <span className="flex flex-wrap items-center gap-3">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={MIN_CONTINUOUS_SEC}
+                max={MAX_CONTINUOUS_SEC}
+                step={1}
+                aria-label="Custom interval in seconds"
+                className="w-full max-w-[10rem] border border-[var(--line)] bg-white px-3 py-2 font-mono"
+                value={Number.isFinite(draft.continuousSeconds) ? draft.continuousSeconds : ""}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (!Number.isFinite(n)) return;
+                  update("continuousSeconds", n);
+                }}
+              />
+              <span className="text-sm text-[var(--ink)]">{formatSecondsLabel(draft.continuousSeconds)}</span>
+            </span>
+            <span className="mt-1 block text-xs text-[var(--muted)]">
+              {MIN_CONTINUOUS_SEC}–{MAX_CONTINUOUS_SEC} seconds. Saved value is clamped to this range.
+            </span>
           </label>
         </fieldset>
       )}

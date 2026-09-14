@@ -17,6 +17,7 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +42,7 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
       const json = (await res.json()) as T & { error?: string };
       if (!json.ok && json.error) setError(json.error);
       setData(json);
+      setFetchedAt(Date.now());
     } catch {
       setError("Unable to refresh the book.");
     } finally {
@@ -52,6 +54,7 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
     if (!ready || !session) return;
     if (!session.open) {
       setData(null);
+      setFetchedAt(null);
       return;
     }
     void loadBook();
@@ -64,6 +67,7 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
   }, [ready, session?.open, settings.refreshMode, settings.continuousSeconds, loadBook]);
 
   const showRun = Boolean(session?.open && settings.refreshMode === "manual");
+  const intervalSec = refreshMs(settings.refreshMode, settings.continuousSeconds) / 1000;
 
-  return { session, data, loading, error, loadBook, showRun };
+  return { session, data, loading, error, loadBook, showRun, fetchedAt, intervalSec };
 }
