@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { DEFAULT_SETTINGS, REFRESH_OPTIONS } from "@/lib/settings";
+import { InfoTip } from "@/components/InfoTip";
+import {
+  CONTINUOUS_PRESETS,
+  DEFAULT_SETTINGS,
+  MAX_CONTINUOUS_SEC,
+  MIN_CONTINUOUS_SEC,
+  REFRESH_OPTIONS,
+} from "@/lib/settings";
 import type { DeskSettings, RefreshMode } from "@/lib/types";
 import { useDeskSettings } from "@/lib/useDeskSettings";
 
@@ -56,10 +63,52 @@ export function SettingsForm() {
         ))}
       </fieldset>
 
+      {draft.refreshMode === "continuous" && (
+        <fieldset className="space-y-3">
+          <legend className="text-sm font-medium text-[var(--ink)]">Continuous interval</legend>
+          <p className="text-xs text-[var(--muted)]">
+            How often the open-market book refreshes. Minimum {MIN_CONTINUOUS_SEC} seconds so the feed is not overloaded.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {CONTINUOUS_PRESETS.map((seconds) => (
+              <button
+                key={seconds}
+                type="button"
+                aria-pressed={draft.continuousSeconds === seconds}
+                className={`px-3 py-1.5 text-sm ${
+                  draft.continuousSeconds === seconds
+                    ? "bg-[var(--accent)] text-white"
+                    : "border border-[var(--line)] bg-white text-[var(--ink)]"
+                }`}
+                onClick={() => update("continuousSeconds", seconds)}
+              >
+                {seconds}s
+              </button>
+            ))}
+          </div>
+          <label className="block text-sm">
+            <span className="mb-1 block text-[var(--muted)]">Seconds ({MIN_CONTINUOUS_SEC}–{MAX_CONTINUOUS_SEC})</span>
+            <input
+              type="number"
+              min={MIN_CONTINUOUS_SEC}
+              max={MAX_CONTINUOUS_SEC}
+              step={1}
+              className="w-full max-w-[10rem] border border-[var(--line)] bg-white px-3 py-2"
+              value={draft.continuousSeconds}
+              onChange={(e) => update("continuousSeconds", Number(e.target.value))}
+            />
+          </label>
+        </fieldset>
+      )}
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <label className="text-sm">
-          <span className="mb-1 block text-[var(--muted)]">Fast average (days)</span>
+        <div className="text-sm">
+          <span className="mb-1 flex items-center gap-1 text-[var(--muted)]">
+            <label htmlFor="sma-fast">Fast average (days)</label>
+            <InfoTip tipKey="smaFast" />
+          </span>
           <input
+            id="sma-fast"
             type="number"
             min={5}
             max={100}
@@ -67,10 +116,14 @@ export function SettingsForm() {
             value={draft.smaFast}
             onChange={(e) => update("smaFast", Number(e.target.value))}
           />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-[var(--muted)]">Slow average (days)</span>
+        </div>
+        <div className="text-sm">
+          <span className="mb-1 flex items-center gap-1 text-[var(--muted)]">
+            <label htmlFor="sma-slow">Slow average (days)</label>
+            <InfoTip tipKey="smaSlow" />
+          </span>
           <input
+            id="sma-slow"
             type="number"
             min={20}
             max={400}
@@ -78,10 +131,14 @@ export function SettingsForm() {
             value={draft.smaSlow}
             onChange={(e) => update("smaSlow", Number(e.target.value))}
           />
-        </label>
-        <label className="text-sm">
-          <span className="mb-1 block text-[var(--muted)]">Stop multiple</span>
+        </div>
+        <div className="text-sm">
+          <span className="mb-1 flex items-center gap-1 text-[var(--muted)]">
+            <label htmlFor="stop-multiple">Stop multiple</label>
+            <InfoTip tipKey="stopMultiple" />
+          </span>
           <input
+            id="stop-multiple"
             type="number"
             min={0.5}
             max={5}
@@ -90,7 +147,7 @@ export function SettingsForm() {
             value={draft.stopMultiple}
             onChange={(e) => update("stopMultiple", Number(e.target.value))}
           />
-        </label>
+        </div>
       </div>
 
       <div className="flex items-center gap-3">

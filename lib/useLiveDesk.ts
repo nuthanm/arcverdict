@@ -55,13 +55,13 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
       return;
     }
     void loadBook();
-    const interval = refreshMs(settings.refreshMode);
+    const interval = refreshMs(settings.refreshMode, settings.continuousSeconds);
     if (!interval) return;
     const id = setInterval(() => {
       void loadBook();
     }, interval);
     return () => clearInterval(id);
-  }, [ready, session?.open, settings.refreshMode, loadBook]);
+  }, [ready, session?.open, settings.refreshMode, settings.continuousSeconds, loadBook]);
 
   const showRun = Boolean(session?.open && settings.refreshMode === "manual");
 

@@ -1,4 +1,5 @@
 import { emptyCounts, engineParams } from "@/lib/api";
+import { NSE_NOT_IN_SNAPSHOT } from "@/lib/copy";
 import { classify } from "@/lib/engine";
 import { env } from "@/lib/env";
 import { executablePrices } from "@/lib/prices";
@@ -45,6 +46,11 @@ export async function GET(request: Request) {
         dayHigh: q?.regularMarketDayHigh ?? null,
         dayLow: q?.regularMarketDayLow ?? null,
         stopMultiple: params.stopMultiple,
+        smaFastPeriod: params.smaFast,
+        smaSlowPeriod: params.smaSlow,
+        smaFastWindow: q?.smaFastWindow,
+        smaSlowWindow: q?.smaSlowWindow,
+        lastMissingWhy: NSE_NOT_IN_SNAPSHOT,
       });
       const asOf =
         q?.regularMarketTime != null ? formatIst(new Date(q.regularMarketTime * 1000)) : runAt;
@@ -62,6 +68,7 @@ export async function GET(request: Request) {
         action: decision.action,
         why: decision.why,
         stop: decision.stop,
+        conviction: decision.conviction,
         asOf,
       };
     });

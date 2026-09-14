@@ -1,8 +1,43 @@
 "use client";
 
+import { ActionBadge } from "@/components/ActionBadge";
+import { DeskStatus } from "@/components/DeskStatus";
+import { FillNowCell } from "@/components/FillNowCell";
+import { HintCorner } from "@/components/InfoTip";
+import { ConvictionChangeTiles, HintStat, HintTh } from "@/components/HintStat";
+import { InstructionPanel } from "@/components/InstructionPanel";
 import { MarketClosed } from "@/components/MarketClosed";
-import { actionClass, actionTitle, inr, pct } from "@/lib/format";
-import type { MetalCode, MetalQuote } from "@/lib/types";
+import {
+  COMEX_LAST_MISSING,
+  COPPER_ETF_EMPTY,
+  DESK_UNIVERSE_NOTE,
+  GOLD_ETF_NOT_IN_FEED,
+  LTP_REFERENCE_NOTE,
+} from "@/lib/copy";
+import {
+  actionClass,
+  actionStance,
+  changeClass,
+  convictionClass,
+  convictionPct,
+  inr,
+  inrUnit,
+  metalEtfHeading,
+  metalQuoteNote,
+  metalUsdDigits,
+  money,
+  pct,
+  showEnterFill,
+  showExitFill,
+  showStopLevel,
+  signedUsd,
+  stanceBar,
+  stanceLabel,
+  unitCaption,
+  usd,
+} from "@/lib/format";
+import { metalSessionLabel, pricesAsOf } from "@/lib/session";
+import type { FxSource, MetalCode, MetalQuote, QuoteCurrency } from "@/lib/types";
 import { useDeskSettings } from "@/lib/useDeskSettings";
 import { useLiveDesk } from "@/lib/useLiveDesk";
 
@@ -12,6 +47,7 @@ type MetalsResponse = {
   marketClosed?: boolean;
   runAt?: string;
   usdInr?: number | null;
+  usdInrSource?: FxSource | null;
   session?: { label: string; hours: string };
   metals?: MetalQuote[];
 };
@@ -26,102 +62,265 @@ export function MetalDesk({ code }: { code: MetalCode }) {
   });
 
   const metal = data?.metals?.find((m) => m.code === code);
+  const ccy: QuoteCurrency = metal?.quoteCurrency ?? "INR";
+  const last = ccy === "INR" ? (metal?.lastInr ?? null) : (metal?.lastUsd ?? null);
+  const hasLast = last != null;
+  const stance = metal ? actionStance(metal.action) : "neutral";
+  const statusSession = session
+    ? { ...session, label: metalSessionLabel(code, session.open) }
+    : session;
+  const listedEtfs = metal?.etfs ?? [];
+  const snapshot = metal?.asOf ?? null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-xs text-[var(--muted)]">
-          {session?.label ?? "Metals"} · {session?.hours}
-        </span>
-        {data?.runAt && session?.open && (
-          <span className="font-mono text-xs text-[var(--muted)]">Last snapshot {data.runAt}</span>
-        )}
-        {loading && <span className="text-xs text-[var(--muted)]">Updating…</span>}
-        {showRun && (
-          <button
-            type="button"
-            onClick={loadBook}
-            disabled={loading}
-            className="ml-auto bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            Refresh snapshot
-          </button>
-        )}
-      </div>
+    <div className="space-y-4">
+      <DeskStatus
+        session={statusSession}
+        fallbackLabel="US metals futures session"
+        runAt={data?.runAt}
+        loading={loading}
+        showRun={showRun}
+        onRefresh={loadBook}
+      />
 
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}
-      {session && !session.open && <MarketClosed session={session} />}
+      {statusSession && !statusSession.open && <MarketClosed session={statusSession} />}
+      {session?.open && !metal && loading && (
+        <p className="border border-[var(--line)] bg-white px-4 py-6 text-sm text-[var(--muted)]">
+          Loading COMEX book…
+        </p>
+      )}
 
       {metal && session?.open && (
         <>
-          <h1 className="text-2xl tracking-tight text-[var(--ink)]">{metal.name}</h1>
-          <p className="text-sm text-[var(--muted)]">{metal.venue}</p>
+          {hasLast ? (
+            <article className="relative overflow-hidden border border-[var(--line)] bg-white">
+              <div className={`h-1.5 ${stanceBar(stance)}`} />
+              <HintCorner tipKey="ltp" />
+              <div className="px-4 pb-4 pt-6 pr-10 sm:px-5 sm:pr-11">
+                <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <h1 className="text-2xl tracking-tight text-[var(--ink)]">{metal.name}</h1>
+                      <p className={`text-sm ${actionClass(metal.action)}`}>{stanceLabel(metal.action)}</p>
+                    </div>
+                    <p className="mt-0.5 text-xs text-[var(--muted)]">{metal.venue}</p>
+                  </div>
+                  <div className="shrink-0 pr-4 text-right">
+                    <p className={`font-mono text-3xl leading-none ${changeClass(metal.changePct)}`}>
+                      {money(last, ccy)}
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--muted)]">LTP · {unitCaption(metal.unit)}</p>
+                    <p className="mt-1 font-mono text-sm text-[var(--ink)]">
+                      <span className="font-semibold">COMEX {usd(metal.lastUsd, metalUsdDigits(metal.code))}</span>
+                      <span className="text-[var(--muted)]"> · </span>
+                      <span className="font-semibold">
+                        {inr(metal.lastInr)} / {inrUnit(metal.unit)}
+                      </span>
+                    </p>
+                    {snapshot ? (
+                      <p className="mt-0.5 text-xs text-[var(--muted)]">{pricesAsOf(snapshot)}</p>
+                    ) : null}
+                  </div>
+                </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat value={inr(metal.buyAt)} label={`Buy at · ${metal.unit}`} />
-            <Stat value={inr(metal.sellAt)} label={`Sell at · ${metal.unit}`} />
-            <Stat value={metal.action} label="Action" className={actionClass(metal.action)} />
-            <Stat value={inr(metal.stop)} label="Protective stop" />
-          </div>
+                <MetalQuoteBoard metal={metal} />
 
-          <section className="border border-[var(--line)] bg-white p-4">
-            <p className={`text-sm ${actionClass(metal.action)}`}>{actionTitle(metal.action)}</p>
-            <p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">{metal.why}</p>
-            <p className="mt-4 font-mono text-xs text-[var(--muted)]">
-              {metal.yahoo}
-              {metal.lastUsd != null ? ` · ${metal.lastUsd.toFixed(2)} USD` : ""}
-              {data?.usdInr != null ? ` · USD/INR ${data.usdInr.toFixed(2)}` : ""}
-              {metal.priceSource === "bid_ask" ? " · quoted bid/ask" : " · last print ± spread"}
-            </p>
-          </section>
+                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {showEnterFill(metal.action) && (
+                    <HintStat
+                      value={money(metal.buyAt, ccy)}
+                      label="Enter at"
+                      tipKey="enterAt"
+                      className={actionClass("BUY")}
+                      wash="bg-[var(--buy-wash)]"
+                    />
+                  )}
+                  {showExitFill(metal.action) && (
+                    <HintStat
+                      value={money(metal.sellAt, ccy)}
+                      label="Exit at"
+                      tipKey="exitAt"
+                      className={actionClass("SELL")}
+                      wash="bg-[var(--sell-wash)]"
+                    />
+                  )}
+                  {showStopLevel(metal.action) && (
+                    <HintStat
+                      value={money(metal.stop, ccy)}
+                      label="Protective stop"
+                      tipKey="stop"
+                      wash="bg-[var(--wash)]"
+                    />
+                  )}
+                  <ConvictionChangeTiles conviction={metal.conviction} changePct={metal.changePct} />
+                </div>
 
-          <h2 className="text-sm text-[var(--ink)]">Listed ETFs — executable levels</h2>
-          {metal.etfs.length === 0 ? (
-            <p className="text-sm text-[var(--muted)]">
-              No liquid India-listed copper ETF in the current universe. Use the metal levels above.
-            </p>
+                <InstructionPanel
+                  className="mt-4"
+                  action={metal.action}
+                  why={metal.why}
+                  footer={metalFooter(metal, data)}
+                />
+              </div>
+            </article>
           ) : (
-            <div className="overflow-x-auto border border-[var(--line)] bg-white">
-              <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">ETF</th>
-                    <th className="px-3 py-2 font-medium">Action</th>
-                    <th className="px-3 py-2 font-medium text-right">Buy at</th>
-                    <th className="px-3 py-2 font-medium text-right">Sell at</th>
-                    <th className="px-3 py-2 font-medium text-right">Change</th>
-                    <th className="px-3 py-2 font-medium">Instruction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {metal.etfs.map((etf) => (
-                    <tr key={etf.ticker} className="border-t border-[var(--line)]">
-                      <td className="px-3 py-2">
-                        <span className="font-mono">{etf.ticker}</span>
-                        <span className="mt-0.5 block text-xs text-[var(--muted)]">{etf.name}</span>
-                      </td>
-                      <td className={`px-3 py-2 font-mono text-xs ${actionClass(etf.action)}`}>{etf.action}</td>
-                      <td className="px-3 py-2 text-right font-mono">{inr(etf.buyAt)}</td>
-                      <td className="px-3 py-2 text-right font-mono">{inr(etf.sellAt)}</td>
-                      <td className="px-3 py-2 text-right font-mono">{pct(etf.changePct)}</td>
-                      <td className="px-3 py-2 text-[var(--muted)]">{etf.why}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <article className="border border-[var(--line)] bg-white px-4 py-5 sm:px-5">
+              <h1 className="text-2xl tracking-tight text-[var(--ink)]">{metal.name}</h1>
+              <p className="mt-0.5 text-xs text-[var(--muted)]">{metal.venue}</p>
+              <p className="mt-3 max-w-2xl text-sm text-[var(--ink)]">
+                {COMEX_LAST_MISSING} No last print for this contract.
+              </p>
+              <InstructionPanel className="mt-4" action={metal.action} why={metal.why} footer={metalFooter(metal, data)} />
+            </article>
           )}
+
+          <section>
+            <h2 className="mb-2 text-sm text-[var(--ink)]">{metalEtfHeading(code)}</h2>
+            {listedEtfs.length === 0 ? (
+              <>
+                <p className="max-w-2xl text-sm leading-relaxed text-[var(--muted)]">{COPPER_ETF_EMPTY}</p>
+                <p className="mt-2 max-w-2xl text-xs text-[var(--muted)]">{DESK_UNIVERSE_NOTE}</p>
+              </>
+            ) : (
+              <>
+                <div className="overflow-x-auto border border-[var(--line)] bg-white">
+                  <table className="w-full min-w-[960px] text-left text-sm">
+                    <thead className="bg-[var(--wash)] text-[11px] tracking-wide text-[var(--muted)]">
+                      <tr>
+                        <th className="whitespace-nowrap px-3 py-2 font-medium">ETF</th>
+                        <th className="whitespace-nowrap px-3 py-2 font-medium">Action</th>
+                        <HintTh tipKey="ltp" className="text-right">
+                          LTP
+                        </HintTh>
+                        <HintTh tipKey="payReceive" className="text-right">
+                          Pay / Receive now
+                        </HintTh>
+                        <HintTh tipKey="conviction" className="text-right">
+                          Conviction
+                        </HintTh>
+                        <HintTh tipKey="change" className="text-right">
+                          Change
+                        </HintTh>
+                        <th className="whitespace-nowrap px-3 py-2 font-medium">Instruction</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {listedEtfs.map((etf) => (
+                        <tr key={etf.ticker} className="border-t border-[var(--line)] hover:bg-[var(--wash)]">
+                          <td className="px-3 py-1.5">
+                            <span className="font-mono">{etf.ticker}</span>
+                            <span className="mt-0.5 block text-[11px] text-[var(--muted)]">{etf.name}</span>
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <ActionBadge action={etf.action} />
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono">
+                            {money(etf.last, "INR")}
+                            {etf.asOf ? (
+                              <span className="mt-0.5 block text-[11px] font-sans text-[var(--muted)]">
+                                {pricesAsOf(etf.asOf)}
+                              </span>
+                            ) : null}
+                          </td>
+                          <FillNowCell
+                            action={etf.action}
+                            buyLabel={etf.last == null ? null : money(etf.buyAt, "INR")}
+                            sellLabel={etf.last == null ? null : money(etf.sellAt, "INR")}
+                          />
+                          <td className={`px-3 py-1.5 text-right font-mono ${convictionClass(etf.conviction)}`}>
+                            {convictionPct(etf.conviction)}
+                          </td>
+                          <td className={`px-3 py-1.5 text-right font-mono ${changeClass(etf.changePct)}`}>
+                            {pct(etf.changePct)}
+                          </td>
+                          <td className="px-3 py-1.5 text-[var(--muted)]">{etf.why}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-2 text-xs text-[var(--muted)]">{LTP_REFERENCE_NOTE}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">{DESK_UNIVERSE_NOTE}</p>
+              </>
+            )}
+            {code === "gold" ? (
+              <p className="mt-2 text-xs text-[var(--muted)]">{GOLD_ETF_NOT_IN_FEED}</p>
+            ) : null}
+          </section>
         </>
       )}
     </div>
   );
 }
 
-function Stat({ value, label, className }: { value: string; label: string; className?: string }) {
+function metalFooter(metal: MetalQuote, data: MetalsResponse | null) {
+  return metalQuoteNote(metal.name, metal.lastUsd, metal.priceSource, data?.usdInr, data?.usdInrSource);
+}
+
+function MetalQuoteBoard({ metal }: { metal: MetalQuote }) {
+  const digits = metalUsdDigits(metal.code);
+  const prevCloseInr =
+    metal.prevClose != null && metal.lastUsd != null && metal.lastInr != null && metal.lastUsd !== 0
+      ? (metal.lastInr / metal.lastUsd) * metal.prevClose
+      : null;
+  const lastTrade = metal.asOf ? pricesAsOf(metal.asOf).replace(/^Prices as of\s+/i, "") : "—";
+
   return (
-    <div className="border border-[var(--line)] bg-white px-3 py-3">
-      <p className={`font-mono text-xl ${className ?? ""}`}>{value}</p>
-      <p className="text-xs text-[var(--muted)]">{label}</p>
+    <div className="mt-4 overflow-x-auto border border-[var(--line)] bg-[var(--wash)]">
+      <table className="w-full min-w-[28rem] text-left text-xs">
+        <caption className="sr-only">
+          COMEX and India last, change, close, high, low, and last trade time
+        </caption>
+        <thead className="text-[11px] tracking-wide text-[var(--muted)]">
+          <tr>
+            <th className="whitespace-nowrap px-3 py-1.5 font-medium">Quote</th>
+            <th className="whitespace-nowrap px-3 py-1.5 text-right font-medium">US (COMEX)</th>
+            <th className="whitespace-nowrap px-3 py-1.5 text-right font-medium">India</th>
+          </tr>
+        </thead>
+        <tbody className="bg-white text-[var(--ink)]">
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Last</th>
+            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(metal.changePct)}`}>
+              {usd(metal.lastUsd, digits)}
+            </td>
+            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(metal.changePct)}`}>
+              {inr(metal.lastInr)}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Change</th>
+            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(metal.changePct)}`}>
+              {signedUsd(metal.changeUsd, digits)} {pct(metal.changePct)}
+            </td>
+            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(metal.changePct)}`}>
+              {pct(metal.changePct)}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Close</th>
+            <td className="px-3 py-1.5 text-right font-mono">{usd(metal.prevClose, digits)}</td>
+            <td className="px-3 py-1.5 text-right font-mono">{inr(prevCloseInr)}</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">High</th>
+            <td className="px-3 py-1.5 text-right font-mono">{usd(metal.dayHigh, digits)}</td>
+            <td className="px-3 py-1.5 text-right font-mono text-[var(--muted)]">—</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Low</th>
+            <td className="px-3 py-1.5 text-right font-mono">{usd(metal.dayLow, digits)}</td>
+            <td className="px-3 py-1.5 text-right font-mono text-[var(--muted)]">—</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Last trade</th>
+            <td className="px-3 py-1.5 text-right font-mono" colSpan={2}>
+              {lastTrade}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
