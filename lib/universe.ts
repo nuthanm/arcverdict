@@ -1,4 +1,4 @@
-/** Liquid Nifty 500 names plus listed ETFs Yahoo Finance serves as NSE `.NS` quotes. */
+/** Desk Nifty 500 reference list — not the full NSE, and not every Nifty 500 name. */
 export const NIFTY_UNIVERSE: { ticker: string; name: string; kind?: "equity" | "etf" }[] = [
   { ticker: "RELIANCE", name: "Reliance Industries" },
   { ticker: "HDFCBANK", name: "HDFC Bank" },
@@ -150,7 +150,6 @@ export const NIFTY_UNIVERSE: { ticker: string; name: string; kind?: "equity" | "
   { ticker: "MON100", name: "Motilal Oswal Nasdaq 100 ETF", kind: "etf" },
   { ticker: "GOLDBEES", name: "Nippon India ETF Gold BeES", kind: "etf" },
   { ticker: "SETFGOLD", name: "SBI Gold ETF", kind: "etf" },
-  { ticker: "GOLDSHARE", name: "UTI Gold ETF", kind: "etf" },
   { ticker: "SILVERBEES", name: "Nippon India Silver ETF", kind: "etf" },
 ];
 
@@ -158,9 +157,27 @@ export const METAL_ETFS: Record<"gold" | "silver" | "copper", { ticker: string; 
   gold: [
     { ticker: "GOLDBEES", name: "Nippon India ETF Gold BeES" },
     { ticker: "SETFGOLD", name: "SBI Gold ETF" },
-    { ticker: "GOLDSHARE", name: "UTI Gold ETF" },
+    { ticker: "HDFCGOLD", name: "HDFC Gold ETF" },
+    { ticker: "GOLDIETF", name: "ICICI Prudential Gold ETF" },
+    { ticker: "GOLD1", name: "Kotak Gold ETF" },
+    { ticker: "GOLDAXIS", name: "Axis Gold ETF" },
+    { ticker: "QGOLDHALF", name: "Quantum Gold ETF" },
+    { ticker: "BSLGOLDETF", name: "Aditya Birla Sun Life Gold ETF" },
+    { ticker: "IVZINGOLD", name: "Invesco India Gold ETF" },
+    { ticker: "LICMFGOLD", name: "LIC Gold ETF" },
+    { ticker: "TATAGOLD", name: "Tata Gold ETF" },
   ],
-  silver: [{ ticker: "SILVERBEES", name: "Nippon India Silver ETF" }],
+  silver: [
+    { ticker: "SILVERBEES", name: "Nippon India Silver ETF" },
+    { ticker: "SILVERIETF", name: "ICICI Prudential Silver ETF" },
+    { ticker: "HDFCSILVER", name: "HDFC Silver ETF" },
+    { ticker: "SBISILVER", name: "SBI Silver ETF" },
+    { ticker: "SILVER", name: "Aditya Birla Silver ETF" },
+    { ticker: "SILVERAXIS", name: "Axis Silver ETF" },
+    { ticker: "SILVER1", name: "Kotak Silver ETF" },
+    { ticker: "TATSILV", name: "Tata Silver ETF" },
+    { ticker: "SILVERADD", name: "DSP Silver ETF" },
+  ],
   copper: [],
 };
 
@@ -171,6 +188,7 @@ export const METAL_SPECS = [
     yahoo: "GC=F",
     venue: "COMEX → INR (MCX-style 10g)",
     unit: "₹ / 10g",
+    usdUnit: "USD / oz",
     convert: (usdPerOz: number, usdInr: number) =>
       (usdPerOz / 31.1034768) * 10 * usdInr,
   },
@@ -180,6 +198,7 @@ export const METAL_SPECS = [
     yahoo: "SI=F",
     venue: "COMEX → INR (MCX-style kg)",
     unit: "₹ / kg",
+    usdUnit: "USD / oz",
     convert: (usdPerOz: number, usdInr: number) =>
       (usdPerOz / 31.1034768) * 1000 * usdInr,
   },
@@ -189,6 +208,7 @@ export const METAL_SPECS = [
     yahoo: "HG=F",
     venue: "COMEX → INR (per kg)",
     unit: "₹ / kg",
+    usdUnit: "USD / lb",
     convert: (usdPerLb: number, usdInr: number) => usdPerLb * 2.20462 * usdInr,
   },
 ];

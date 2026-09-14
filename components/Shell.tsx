@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LEGAL_MARKET_NOTE, REFERENCE_FOOTER } from "@/lib/copy";
 
 const NAV = [
   { href: "/", label: "Nifty 500" },
@@ -10,6 +11,10 @@ const NAV = [
   { href: "/copper", label: "Copper" },
   { href: "/settings", label: "Settings" },
 ];
+
+function LegendTerm({ children }: { children: string }) {
+  return <strong className="font-semibold text-[var(--accent)]">{children}</strong>;
+}
 
 function Logo() {
   return (
@@ -25,12 +30,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="mx-auto flex min-h-full max-w-6xl flex-col px-5 py-6">
-      <header className="mb-6 flex flex-wrap items-center gap-3 border-b border-[var(--line)] pb-4">
-        <Logo />
-        <div>
-          <p className="font-mono text-[11px] tracking-[0.18em] text-[var(--accent)]">ARCV</p>
-          <p className="text-sm text-[var(--ink)]">ArcVerdict</p>
-        </div>
+      <header className="mb-4 flex flex-wrap items-center gap-3 border-b border-[var(--line)] pb-3">
+        <Link
+          href="/"
+          aria-label="ArcVerdict home"
+          className="flex items-center gap-3 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2"
+        >
+          <Logo />
+          <span>
+            <span className="block font-mono text-[11px] tracking-[0.18em] text-[var(--accent)]">ARCV</span>
+            <span className="block text-sm text-[var(--ink)]">ArcVerdict</span>
+          </span>
+        </Link>
         <nav className="ml-auto flex flex-wrap gap-1">
           {NAV.map((item) => {
             const active = path === item.href;
@@ -49,8 +60,19 @@ export function Shell({ children }: { children: React.ReactNode }) {
         </nav>
       </header>
       <main className="flex-1">{children}</main>
-      <footer className="mt-10 border-t border-[var(--line)] pt-4 text-xs text-[var(--muted)]">
-        BUY enter · SELL exit · HOLD maintain · WATCH wait · NONE no instruction. Research overlay, not a solicitation.
+      <footer className="mt-8 border-t border-[var(--line)] pt-4 text-xs leading-relaxed text-[var(--muted)]">
+        <p className="text-sm text-[var(--ink)]">{REFERENCE_FOOTER}</p>
+        <p className="mt-3">
+          <LegendTerm>BUY</LegendTerm> means enter. <LegendTerm>SELL</LegendTerm> means exit / come out.{" "}
+          <LegendTerm>HOLD</LegendTerm> means stay in the position. <LegendTerm>WATCH</LegendTerm> means wait — no
+          enter or exit now. <LegendTerm>NONE</LegendTerm> means no instruction.
+        </p>
+        <p className="mt-3 max-w-3xl">
+          Educational purpose only. This is a research and education overlay, not investment advice, not a
+          solicitation, and not a SEBI-registered investment adviser or research analyst product. Do not treat
+          anything on this site as a recommendation to buy or sell. Markets can lose money. {LEGAL_MARKET_NOTE}
+        </p>
+        <p className="mt-3">© 2026 ArcVerdict. All rights reserved.</p>
       </footer>
     </div>
   );

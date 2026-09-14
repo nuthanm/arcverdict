@@ -1,17 +1,18 @@
 import { engineParams } from "@/lib/api";
+import { COMEX_LAST_MISSING, NSE_NOT_IN_SNAPSHOT } from "@/lib/copy";
 import { classify } from "@/lib/engine";
 import { env } from "@/lib/env";
 import { executablePrices } from "@/lib/prices";
-import { formatIst, mcxSession } from "@/lib/session";
-import type { EtfQuote, MetalQuote } from "@/lib/types";
+import { comexSession, formatIst } from "@/lib/session";
+import type { EtfQuote, MetalQuote, QuoteCurrency } from "@/lib/types";
 import { METAL_ETFS, METAL_SPECS } from "@/lib/universe";
-import { fetchYahooQuotes, nseSymbol } from "@/lib/yahoo";
+import { fetchUsdInr, fetchYahooQuotes, nseSymbol, quoteBySymbol } from "@/lib/yahoo";
 
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  const session = mcxSession();
+  const session = comexSession();
   if (!session.open && !env.allowClosedMarketFetch) {
     return Response.json({
       ok: true,
@@ -19,72 +20,113 @@ export async function GET(request: Request) {
       session,
       metals: [],
       usdInr: null,
+      usdInrSource: null,
     });
   }
 
   try {
     const params = engineParams(new URL(request.url).searchParams);
     const etfTickers = [...new Set(Object.values(METAL_ETFS).flat().map((e) => nseSymbol(e.ticker)))];
-    const symbols = [...METAL_SPECS.map((m) => m.yahoo), "USDINR=X", ...etfTickers];
-    const quotes = await fetchYahooQuotes(symbols, {
-      smaFast: params.smaFast,
-      smaSlow: params.smaSlow,
-    });
-    const bySymbol = new Map(quotes.map((q) => [q.symbol, q]));
-    const usdInr = bySymbol.get("USDINR=X")?.regularMarketPrice ?? null;
+    const symbols = [...METAL_SPECS.map((m) => m.yahoo), ...etfTickers];
+    const [quotes, fx] = await Promise.all([
+      fetchYahooQuotes(symbols, {
+        smaFast: params.smaFast,
+        smaSlow: params.smaSlow,
+      }),
+      fetchUsdInr(),
+    ]);
+    const usdInr = fx?.rate ?? null;
+    const usdInrSource = fx?.source ?? null;
     const runAt = formatIst();
 
     const metals: MetalQuote[] = METAL_SPECS.map((spec) => {
-      const q = bySymbol.get(spec.yahoo);
+      const q = quoteBySymbol(quotes, spec.yahoo);
       const lastUsd = q?.regularMarketPrice ?? null;
+      const prevClose = q?.previousClose ?? null;
+      const dayHighUsd = q?.regularMarketDayHigh ?? null;
+      const dayLowUsd = q?.regularMarketDayLow ?? null;
+      const changeUsd =
+        lastUsd != null && prevClose != null ? lastUsd - prevClose : (q?.regularMarketChange ?? null);
+      const changePct =
+        q?.regularMarketChangePercent ??
+        (lastUsd != null && prevClose != null && prevClose !== 0 ? ((lastUsd - prevClose) / prevClose) * 100 : null);
+      const quoteCurrency: QuoteCurrency = usdInr != null ? "INR" : "USD";
+      const toDesk = (usd: number | null | undefined) => {
+        if (usd == null) return null;
+        return usdInr != null ? spec.convert(usd, usdInr) : usd;
+      };
+      const last = toDesk(lastUsd);
       const lastInr = lastUsd != null && usdInr != null ? spec.convert(lastUsd, usdInr) : null;
-      const smaFastUsd = q?.fiftyDayAverage ?? null;
-      const smaSlowUsd = q?.twoHundredDayAverage ?? null;
-      const smaFast = smaFastUsd != null && usdInr != null ? spec.convert(smaFastUsd, usdInr) : null;
-      const smaSlow = smaSlowUsd != null && usdInr != null ? spec.convert(smaSlowUsd, usdInr) : null;
-      const dayHigh =
-        q?.regularMarketDayHigh != null && usdInr != null ? spec.convert(q.regularMarketDayHigh, usdInr) : null;
-      const dayLow =
-        q?.regularMarketDayLow != null && usdInr != null ? spec.convert(q.regularMarketDayLow, usdInr) : null;
+      const smaFast = toDesk(q?.fiftyDayAverage ?? null);
+      const smaSlow = toDesk(q?.twoHundredDayAverage ?? null);
+      const dayHigh = toDesk(q?.regularMarketDayHigh ?? null);
+      const dayLow = toDesk(q?.regularMarketDayLow ?? null);
       const exec = executablePrices({
-        last: lastInr,
-        bid: q?.bid != null && usdInr != null ? spec.convert(q.bid, usdInr) : null,
-        ask: q?.ask != null && usdInr != null ? spec.convert(q.ask, usdInr) : null,
+        last,
+        bid: toDesk(q?.bid ?? null),
+        ask: toDesk(q?.ask ?? null),
         kind: "etf",
       });
       const decision = classify({
-        last: lastInr,
+        last,
         smaFast,
         smaSlow,
         dayHigh,
         dayLow,
         stopMultiple: params.stopMultiple,
+        smaFastPeriod: params.smaFast,
+        smaSlowPeriod: params.smaSlow,
+        smaFastWindow: q?.smaFastWindow,
+        smaSlowWindow: q?.smaSlowWindow,
+        lastMissingWhy: COMEX_LAST_MISSING,
       });
 
       const etfs: EtfQuote[] = METAL_ETFS[spec.code].map((etf) => {
-        const eq = bySymbol.get(nseSymbol(etf.ticker));
-        const last = eq?.regularMarketPrice ?? null;
-        const prices = executablePrices({ last, bid: eq?.bid, ask: eq?.ask, kind: "etf" });
+        const eq = quoteBySymbol(quotes, nseSymbol(etf.ticker));
+        if (!eq) {
+          return {
+            ticker: etf.ticker,
+            name: etf.name,
+            last: null,
+            buyAt: null,
+            sellAt: null,
+            priceSource: "last" as const,
+            changePct: null,
+            action: "NONE" as const,
+            why: NSE_NOT_IN_SNAPSHOT,
+            stop: null,
+            conviction: 0,
+            asOf: runAt,
+          };
+        }
+        const etfLast = eq.regularMarketPrice ?? null;
+        const prices = executablePrices({ last: etfLast, bid: eq.bid, ask: eq.ask, kind: "etf" });
         const etfDecision = classify({
-          last,
-          smaFast: eq?.fiftyDayAverage ?? null,
-          smaSlow: eq?.twoHundredDayAverage ?? null,
-          dayHigh: eq?.regularMarketDayHigh ?? null,
-          dayLow: eq?.regularMarketDayLow ?? null,
+          last: etfLast,
+          smaFast: eq.fiftyDayAverage ?? null,
+          smaSlow: eq.twoHundredDayAverage ?? null,
+          dayHigh: eq.regularMarketDayHigh ?? null,
+          dayLow: eq.regularMarketDayLow ?? null,
           stopMultiple: params.stopMultiple,
+          smaFastPeriod: params.smaFast,
+          smaSlowPeriod: params.smaSlow,
+          smaFastWindow: eq.smaFastWindow,
+          smaSlowWindow: eq.smaSlowWindow,
+          lastMissingWhy: NSE_NOT_IN_SNAPSHOT,
         });
         return {
           ticker: etf.ticker,
           name: etf.name,
-          last,
+          last: etfLast,
           buyAt: prices.buyAt,
           sellAt: prices.sellAt,
           priceSource: prices.priceSource,
-          changePct: eq?.regularMarketChangePercent ?? null,
+          changePct: eq.regularMarketChangePercent ?? null,
           action: etfDecision.action,
           why: etfDecision.why,
           stop: etfDecision.stop,
-          asOf: eq?.regularMarketTime != null ? formatIst(new Date(eq.regularMarketTime * 1000)) : runAt,
+          conviction: etfDecision.conviction,
+          asOf: eq.regularMarketTime != null ? formatIst(new Date(eq.regularMarketTime * 1000)) : runAt,
         };
       });
 
@@ -98,13 +140,19 @@ export async function GET(request: Request) {
         buyAt: exec.buyAt,
         sellAt: exec.sellAt,
         priceSource: exec.priceSource,
-        unit: spec.unit,
-        changePct: q?.regularMarketChangePercent ?? null,
+        quoteCurrency,
+        unit: quoteCurrency === "INR" ? spec.unit : spec.usdUnit,
+        changePct,
+        changeUsd,
+        dayHigh: dayHighUsd,
+        dayLow: dayLowUsd,
+        prevClose,
         smaFast,
         smaSlow,
         action: decision.action,
         why: decision.why,
         stop: decision.stop,
+        conviction: decision.conviction,
         asOf: q?.regularMarketTime != null ? formatIst(new Date(q.regularMarketTime * 1000)) : runAt,
         etfs,
       };
@@ -115,6 +163,7 @@ export async function GET(request: Request) {
       marketClosed: false,
       runAt,
       usdInr,
+      usdInrSource,
       session,
       metals,
     });

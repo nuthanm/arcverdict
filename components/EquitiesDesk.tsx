@@ -2,8 +2,32 @@
 
 import { useMemo, useState } from "react";
 import { ActionBadge } from "@/components/ActionBadge";
+import { DeskStatus } from "@/components/DeskStatus";
+import { FillNowCell } from "@/components/FillNowCell";
+import { HintCorner } from "@/components/InfoTip";
+import { ConvictionChangeTiles, HintStat, HintTh } from "@/components/HintStat";
+import { InstructionPanel } from "@/components/InstructionPanel";
 import { MarketClosed } from "@/components/MarketClosed";
-import { actionClass, actionTitle, inr, pct } from "@/lib/format";
+import { DESK_UNIVERSE_NOTE, NIFTY_UNIVERSE_NOTE, NSE_LISTED_SNAPSHOT } from "@/lib/copy";
+import {
+  actionBorder,
+  actionClass,
+  actionStance,
+  actionWash,
+  changeClass,
+  convictionClass,
+  convictionPct,
+  equityQuoteNote,
+  inr,
+  meanConviction,
+  pct,
+  showEnterFill,
+  showExitFill,
+  showStopLevel,
+  stanceBar,
+  stanceLabel,
+} from "@/lib/format";
+import { pricesAsOf } from "@/lib/session";
 import type { Action, ScanRow } from "@/lib/types";
 import { useDeskSettings } from "@/lib/useDeskSettings";
 import { useLiveDesk } from "@/lib/useLiveDesk";
@@ -21,6 +45,8 @@ type ScanResponse = {
 };
 
 type View = "transact" | "manage" | "all";
+
+const ACTIONS: Action[] = ["BUY", "SELL", "HOLD", "WATCH", "NONE"];
 
 export function EquitiesDesk() {
   const { settings, ready } = useDeskSettings();
@@ -50,41 +76,68 @@ export function EquitiesDesk() {
     };
   }, [filtered]);
 
+  const bucketConviction = useMemo(() => {
+    const acc = { BUY: [], SELL: [], HOLD: [], WATCH: [], NONE: [] } as Record<Action, number[]>;
+    for (const row of rows) acc[row.action].push(row.conviction);
+    return {
+      BUY: meanConviction(acc.BUY),
+      SELL: meanConviction(acc.SELL),
+      HOLD: meanConviction(acc.HOLD),
+      WATCH: meanConviction(acc.WATCH),
+      NONE: meanConviction(acc.NONE),
+    };
+  }, [rows]);
+
   const picked = rows.find((r) => r.ticker === selected) ?? null;
 
+  const transactN = (data?.counts?.BUY ?? 0) + (data?.counts?.SELL ?? 0);
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="font-mono text-xs text-[var(--muted)]">
-          {session?.label ?? "NSE"} · {session?.hours}
-        </span>
-        {data?.runAt && session?.open && (
-          <span className="font-mono text-xs text-[var(--muted)]">Last snapshot {data.runAt}</span>
-        )}
-        {loading && <span className="text-xs text-[var(--muted)]">Updating…</span>}
-        {showRun && (
-          <button
-            type="button"
-            onClick={loadBook}
-            disabled={loading}
-            className="ml-auto bg-[var(--accent)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            Refresh snapshot
-          </button>
-        )}
-      </div>
+    <div className="space-y-4">
+      <DeskStatus
+        session={session}
+        fallbackLabel="NSE India equity session"
+        runAt={data?.runAt}
+        loading={loading}
+        showRun={showRun}
+        onRefresh={loadBook}
+      />
 
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}
 
       {session && !session.open && <MarketClosed session={session} />}
+      {session?.open && !data && loading && (
+        <p className="border border-[var(--line)] bg-white px-4 py-6 text-sm text-[var(--muted)]">
+          Loading NSE book…
+        </p>
+      )}
+
+      <div>
+        <h1 className="text-2xl tracking-tight text-[var(--ink)]">Nifty 500</h1>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{NIFTY_UNIVERSE_NOTE}</p>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{DESK_UNIVERSE_NOTE}</p>
+        <p className="mt-0.5 text-xs text-[var(--muted)]">{NSE_LISTED_SNAPSHOT}</p>
+        {session?.open && data?.ok ? (
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            {data.quoted ?? 0}/{data.universe ?? 0} quoted · {transactN} enter/exit
+          </p>
+        ) : null}
+      </div>
 
       {session?.open && data?.ok && data.counts && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            {(["BUY", "SELL", "HOLD", "WATCH", "NONE"] as Action[]).map((key) => (
-              <div key={key} className="border border-[var(--line)] bg-white px-3 py-3">
-                <p className={`font-mono text-xl ${actionClass(key)}`}>{data.counts?.[key] ?? 0}</p>
-                <p className="text-xs text-[var(--muted)]">{key}</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {ACTIONS.map((key, index) => (
+              <div
+                key={key}
+                className={`relative border border-[var(--line)] border-l-4 px-3 py-2.5 pr-7 ${actionBorder(key)} ${actionWash(key)}`}
+              >
+                <HintCorner tipKey={key} align={index >= 3 ? "end" : "start"} />
+                <p className={`font-mono text-xl leading-tight ${actionClass(key)}`}>{data.counts?.[key] ?? 0}</p>
+                <p className={`mt-1 text-[11px] ${actionClass(key)}`}>{key}</p>
+                <p className={`mt-1 font-mono text-[11px] ${convictionClass(bucketConviction[key])}`}>
+                  Conv. {convictionPct(bucketConviction[key])}
+                </p>
               </div>
             ))}
           </div>
@@ -122,31 +175,59 @@ export function EquitiesDesk() {
       )}
 
       {picked && session?.open && (
-        <section className="border border-[var(--line)] bg-white p-4">
-          <p className="font-mono text-xs text-[var(--muted)]">
-            {picked.ticker} · {picked.kind === "etf" ? "ETF" : "Equity"}
-          </p>
-          <h2 className="mt-1 text-lg text-[var(--ink)]">{picked.name}</h2>
-          <p className={`mt-3 text-sm ${actionClass(picked.action)}`}>{actionTitle(picked.action)}</p>
-          <p className="mt-2 max-w-2xl text-sm text-[var(--muted)]">{picked.why}</p>
-          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-            <div>
-              <dt className="text-xs text-[var(--muted)]">Buy at</dt>
-              <dd className="font-mono">{inr(picked.buyAt)}</dd>
+        <section className="overflow-hidden border border-[var(--line)] bg-white">
+          <div className={`h-1.5 ${stanceBar(actionStance(picked.action))}`} />
+          <div className="relative p-4 pr-10">
+            <HintCorner tipKey="ltp" />
+            <p className="font-mono text-[11px] text-[var(--muted)]">
+              {picked.ticker} · {picked.kind === "etf" ? "ETF" : "Equity"}
+            </p>
+            <div className="mt-1 flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
+              <div>
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <h2 className="text-lg text-[var(--ink)]">{picked.name}</h2>
+                  <p className={`text-sm ${actionClass(picked.action)}`}>{stanceLabel(picked.action)}</p>
+                </div>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className={`font-mono text-3xl leading-none ${changeClass(picked.changePct)}`}>{inr(picked.last)}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">LTP · NSE last</p>
+                {picked.asOf ? (
+                  <p className="mt-0.5 text-xs text-[var(--muted)]">{pricesAsOf(picked.asOf)}</p>
+                ) : null}
+              </div>
             </div>
-            <div>
-              <dt className="text-xs text-[var(--muted)]">Sell at</dt>
-              <dd className="font-mono">{inr(picked.sellAt)}</dd>
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {showEnterFill(picked.action) && (
+                <HintStat
+                  value={inr(picked.buyAt)}
+                  label="Enter at"
+                  tipKey="enterAt"
+                  className={actionClass("BUY")}
+                  wash="bg-[var(--buy-wash)]"
+                />
+              )}
+              {showExitFill(picked.action) && (
+                <HintStat
+                  value={inr(picked.sellAt)}
+                  label="Exit at"
+                  tipKey="exitAt"
+                  className={actionClass("SELL")}
+                  wash="bg-[var(--sell-wash)]"
+                />
+              )}
+              {showStopLevel(picked.action) && (
+                <HintStat value={inr(picked.stop)} label="Protective stop" tipKey="stop" wash="bg-[var(--wash)]" />
+              )}
+              <ConvictionChangeTiles conviction={picked.conviction} changePct={picked.changePct} />
             </div>
-            <div>
-              <dt className="text-xs text-[var(--muted)]">Protective stop</dt>
-              <dd className="font-mono">{inr(picked.stop)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-[var(--muted)]">Price basis</dt>
-              <dd className="text-xs">{picked.priceSource === "bid_ask" ? "Quoted bid / ask" : "Last print ± spread"}</dd>
-            </div>
-          </dl>
+            <InstructionPanel
+              className="mt-4"
+              action={picked.action}
+              why={picked.why}
+              footer={equityQuoteNote(picked.priceSource)}
+            />
+          </div>
         </section>
       )}
     </div>
@@ -178,43 +259,65 @@ function BookTable({
 }) {
   return (
     <section>
-      <h2 className="mb-2 text-sm text-[var(--ink)]">
+      <h2 className="mb-1.5 text-sm text-[var(--ink)]">
         {title} <span className="text-[var(--muted)]">({rows.length})</span>
       </h2>
       {rows.length === 0 ? (
-        <p className="text-sm text-[var(--muted)]">None in this snapshot.</p>
+        <p className="border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--muted)]">
+          None in this snapshot.
+        </p>
       ) : (
         <div className="overflow-x-auto border border-[var(--line)] bg-white">
-          <table className="w-full min-w-[860px] text-left text-sm">
-            <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
+          <table className="w-full min-w-[1020px] text-left text-sm">
+            <thead className="bg-[var(--wash)] text-[11px] tracking-wide text-[var(--muted)]">
               <tr>
-                <th className="px-3 py-2 font-medium">Action</th>
-                <th className="px-3 py-2 font-medium">Ticker</th>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Type</th>
-                <th className="px-3 py-2 font-medium text-right">Buy at</th>
-                <th className="px-3 py-2 font-medium text-right">Sell at</th>
-                <th className="px-3 py-2 font-medium text-right">Change</th>
-                <th className="px-3 py-2 font-medium">Instruction</th>
+                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Action</th>
+                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Ticker</th>
+                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Name</th>
+                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Type</th>
+                <HintTh tipKey="ltp" className="text-right">
+                  LTP
+                </HintTh>
+                <HintTh tipKey="payReceive" className="text-right">
+                  Pay / Receive now
+                </HintTh>
+                <HintTh tipKey="conviction" className="text-right">
+                  Conviction
+                </HintTh>
+                <HintTh tipKey="change" className="text-right">
+                  Change
+                </HintTh>
+                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Instruction</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr
                   key={r.ticker}
-                  className={`cursor-pointer border-t border-[var(--line)] ${selected === r.ticker ? "bg-[var(--wash)]" : "hover:bg-[var(--wash)]"}`}
+                  className={`cursor-pointer border-t border-[var(--line)] ${
+                    selected === r.ticker ? actionWash(r.action) : "hover:bg-[var(--wash)]"
+                  }`}
                   onClick={() => onSelect(r.ticker)}
                 >
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-1.5">
                     <ActionBadge action={r.action} />
                   </td>
-                  <td className="px-3 py-2 font-mono">{r.ticker}</td>
-                  <td className="px-3 py-2">{r.name}</td>
-                  <td className="px-3 py-2 text-[var(--muted)]">{r.kind === "etf" ? "ETF" : "Equity"}</td>
-                  <td className="px-3 py-2 text-right font-mono">{inr(r.buyAt)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{inr(r.sellAt)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{pct(r.changePct)}</td>
-                  <td className="max-w-[280px] px-3 py-2 text-[var(--muted)]">{r.why}</td>
+                  <td className="px-3 py-1.5 font-mono">{r.ticker}</td>
+                  <td className="px-3 py-1.5">{r.name}</td>
+                  <td className="px-3 py-1.5 text-[var(--muted)]">{r.kind === "etf" ? "ETF" : "Equity"}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">{inr(r.last)}</td>
+                  <FillNowCell
+                    action={r.action}
+                    buyLabel={r.last == null ? null : inr(r.buyAt)}
+                    sellLabel={r.last == null ? null : inr(r.sellAt)}
+                  />
+                  <td className={`px-3 py-1.5 text-right font-mono ${convictionClass(r.conviction)}`}>
+                    {convictionPct(r.conviction)}
+                  </td>
+                  <td className={`px-3 py-1.5 text-right font-mono ${changeClass(r.changePct)}`}>
+                    {pct(r.changePct)}
+                  </td>
+                  <td className="max-w-[280px] px-3 py-1.5 text-[var(--muted)]">{r.why}</td>
                 </tr>
               ))}
             </tbody>
