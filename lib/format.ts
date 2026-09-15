@@ -33,6 +33,16 @@ export function signedUsd(n: number | null | undefined, digits = 2) {
   });
 }
 
+export function signedInr(n: number | null | undefined) {
+  if (n == null || Number.isNaN(n)) return "—";
+  return n.toLocaleString("en-IN", {
+    style: "currency",
+    currency: "INR",
+    signDisplay: "exceptZero",
+    maximumFractionDigits: 2,
+  });
+}
+
 export function metalUsdDigits(code: MetalCode) {
   if (code === "copper") return 4;
   if (code === "silver") return 3;
@@ -103,6 +113,11 @@ export function formatLastTradeStamp(unixSec: number, exchangeTimeZone = "Americ
   const ist = formatClock(date, "Asia/Kolkata");
   const src = formatClock(date, exchangeTimeZone);
   return `${ist.dated} IST · ${src.dated} ${zoneSuffix(exchangeTimeZone)}`;
+}
+
+/** NSE last print — India clock only; the exchange is IST. */
+export function formatNseLastTrade(unixSec: number) {
+  return `${formatClock(new Date(unixSec * 1000), "Asia/Kolkata").dated} IST`;
 }
 
 export function money(n: number | null | undefined, ccy: QuoteCurrency = "INR") {

@@ -97,8 +97,10 @@ export function DeskStatus({
           {(session || loading) && (
             <span className="inline-flex shrink-0 items-center gap-2">
               <StatusChip loading={loading} open={open} />
-              {open && clock ? (
-                <span className="font-mono text-[11px] text-[var(--muted)]">refreshed {clock}</span>
+              {clock ? (
+                <span className="font-mono text-[11px] text-[var(--muted)]">
+                  {open ? "refreshed" : "close snapshot"} {clock}
+                </span>
               ) : null}
             </span>
           )}

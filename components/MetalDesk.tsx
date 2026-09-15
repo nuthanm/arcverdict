@@ -86,13 +86,13 @@ export function MetalDesk({ code }: { code: MetalCode }) {
 
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}
       {statusSession && !statusSession.open && <MarketClosed session={statusSession} />}
-      {session?.open && !metal && loading && (
+      {!metal && loading && (
         <p className="border border-[var(--line)] bg-white px-4 py-6 text-sm text-[var(--muted)]">
           Loading COMEX book…
         </p>
       )}
 
-      {metal && session?.open && (
+      {metal && (
         <>
           {hasLast ? (
             <article className="relative overflow-hidden border border-[var(--line)] bg-white">
