@@ -68,6 +68,15 @@ type ChartResponse = {
   };
 };
 
+type SparkResponse = {
+  spark?: {
+    result?: Array<{
+      symbol?: string;
+      response?: ChartResult[];
+    }>;
+  };
+};
+
 type QuoteResult = {
   symbol?: string;
   regularMarketPrice?: number;
@@ -111,6 +120,10 @@ const USDINR_SYMBOLS = ["USDINR=X", "INR=X"] as const;
 const USDINR_CACHE_MS = 6 * 60 * 60 * 1000;
 const BAR_SEC_1M = 60;
 const BAR_SEC_5M = 5 * 60;
+const FETCH_MS = 8_000;
+const SCAN_BUDGET_MS = 45_000;
+const QUOTE_BATCH = 40;
+const SPARK_BATCH = 20;
 let cachedUsdInr: { rate: number; at: number } | null = null;
 
 export type QuoteFetchOptions = {
@@ -127,6 +140,29 @@ function yahooHeaders() {
     headers.Authorization = `Bearer ${env.marketDataApiKey}`;
   }
   return headers;
+}
+
+function chunk<T>(items: T[], size: number) {
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += size) batches.push(items.slice(i, i + size));
+  return batches;
+}
+
+async function yahooFetch(url: string, attempt = 0): Promise<Response | null> {
+  try {
+    const res = await fetch(url, {
+      headers: yahooHeaders(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_MS),
+    });
+    if (res.status === 429 && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      return yahooFetch(url, attempt + 1);
+    }
+    return res;
+  } catch {
+    return null;
+  }
 }
 
 function numericSeries(values: Array<number | null | undefined> | undefined) {
@@ -318,17 +354,16 @@ async function fetchChartJson(
   symbol: string,
   range: string,
   interval: string,
-  attempt = 0,
 ): Promise<ChartResult | null> {
   const url = `${env.marketDataBaseUrl}/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
-  const res = await fetch(url, { headers: yahooHeaders(), cache: "no-store" });
-  if (res.status === 429 && attempt < 3) {
-    await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
-    return fetchChartJson(symbol, range, interval, attempt + 1);
+  const res = await yahooFetch(url);
+  if (!res?.ok) return null;
+  try {
+    const json = (await res.json()) as ChartResponse;
+    return json.chart?.result?.[0] ?? null;
+  } catch {
+    return null;
   }
-  if (!res.ok) return null;
-  const json = (await res.json()) as ChartResponse;
-  return json.chart?.result?.[0] ?? null;
 }
 
 async function fetchIntradayChart(symbol: string, prefer1m: boolean) {
@@ -358,10 +393,13 @@ async function fetchChart(
   opts: QuoteFetchOptions = {},
 ): Promise<YahooQuote | null> {
   const range = periods.smaSlow > 220 ? "2y" : "1y";
+  const prefer1m = Boolean(opts.prefer1m);
   const [dailyResult, shortDaily, intradayPack] = await Promise.all([
     fetchChartJson(symbol, range, "1d"),
-    opts.prefer1m ? fetchChartJson(symbol, "5d", "1d") : Promise.resolve(null),
-    fetchIntradayChart(symbol, Boolean(opts.prefer1m)),
+    prefer1m ? fetchChartJson(symbol, "5d", "1d") : Promise.resolve(null),
+    prefer1m
+      ? fetchIntradayChart(symbol, true)
+      : Promise.resolve({ result: null as ChartResult | null, barSec: BAR_SEC_5M, range: "5d" as const }),
   ]);
   if (!dailyResult) return fetchQuoteSnapshot(symbol);
 
@@ -528,26 +566,11 @@ function quoteLastPrint(row: QuoteResult): LastPrint | null {
   return null;
 }
 
-async function fetchQuoteSnapshot(symbol: string, attempt = 0): Promise<YahooQuote | null> {
-  const url = `${env.marketDataBaseUrl}/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
-  const res = await fetch(url, { headers: yahooHeaders(), cache: "no-store" });
-  if (res.status === 429 && attempt < 3) {
-    await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
-    return fetchQuoteSnapshot(symbol, attempt + 1);
-  }
-  if (!res.ok) {
-    if (res.status !== 401 && res.status !== 404) {
-      console.info("[arcverdict:last]", symbol, { quoteStatus: res.status, quoteLast: null });
-    }
-    return null;
-  }
-  const json = (await res.json()) as QuoteResponse;
-  const row = json.quoteResponse?.result?.[0];
-  if (!row) return null;
+function yahooQuoteFromRow(row: QuoteResult, fallbackSymbol: string): YahooQuote | null {
   const picked = quoteLastPrint(row);
   if (!picked) return null;
   return {
-    symbol: row.symbol ?? symbol,
+    symbol: row.symbol ?? fallbackSymbol,
     regularMarketPrice: picked.price,
     bid: row.bid,
     ask: row.ask,
@@ -563,8 +586,50 @@ async function fetchQuoteSnapshot(symbol: string, attempt = 0): Promise<YahooQuo
   };
 }
 
-async function fetchQuotePrice(symbol: string, attempt = 0): Promise<number | null> {
-  const snap = await fetchQuoteSnapshot(symbol, attempt);
+function rememberQuote(map: Map<string, YahooQuote>, requested: string, quote: YahooQuote) {
+  map.set(requested, quote);
+  if (quote.symbol) map.set(quote.symbol, quote);
+}
+
+async function fetchQuoteSnapshots(symbols: string[]): Promise<Map<string, YahooQuote>> {
+  const map = new Map<string, YahooQuote>();
+  if (symbols.length === 0) return map;
+  const batches = chunk(symbols, QUOTE_BATCH);
+  await Promise.all(
+    batches.map(async (batch) => {
+      const url = `${env.marketDataBaseUrl}/v7/finance/quote?symbols=${batch.map(encodeURIComponent).join(",")}`;
+      const res = await yahooFetch(url);
+      if (!res?.ok) {
+        if (res && res.status !== 401 && res.status !== 404) {
+          console.info("[arcverdict:last]", { quoteStatus: res.status, batch: batch.length });
+        }
+        return;
+      }
+      try {
+        const json = (await res.json()) as QuoteResponse;
+        const rows = json.quoteResponse?.result ?? [];
+        const bySymbol = new Map(rows.filter((row) => row.symbol).map((row) => [row.symbol as string, row]));
+        for (const requested of batch) {
+          const row = bySymbol.get(requested) ?? rows.find((r) => r.symbol === requested);
+          if (!row) continue;
+          const quote = yahooQuoteFromRow(row, requested);
+          if (quote) rememberQuote(map, requested, quote);
+        }
+      } catch {
+        return;
+      }
+    }),
+  );
+  return map;
+}
+
+async function fetchQuoteSnapshot(symbol: string): Promise<YahooQuote | null> {
+  const map = await fetchQuoteSnapshots([symbol]);
+  return map.get(symbol) ?? null;
+}
+
+async function fetchQuotePrice(symbol: string): Promise<number | null> {
+  const snap = await fetchQuoteSnapshot(symbol);
   return snap?.regularMarketPrice ?? null;
 }
 
@@ -610,13 +675,134 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
   return out;
 }
 
+function yahooQuoteFromSpark(
+  symbol: string,
+  result: ChartResult,
+  periods: { smaFast: number; smaSlow: number },
+): YahooQuote | null {
+  const rawClose = result.indicators?.quote?.[0]?.close ?? [];
+  const adjClose = result.indicators?.adjclose?.[0]?.adjclose ?? [];
+  const useAdj = !rawClose.some((v) => v != null);
+  const closeSeries = useAdj ? adjClose : rawClose;
+  const closes = numericSeries(closeSeries);
+  const daily = lastBar(closeSeries, result.timestamp);
+  const meta = result.meta;
+  const gmtOffset = meta?.gmtoffset ?? 0;
+  const picked = pickLastPrint({
+    daily,
+    intraday: null,
+    metaPrice: meta?.regularMarketPrice,
+    metaTime: meta?.regularMarketTime,
+    gmtOffset,
+    barSec: BAR_SEC_5M,
+  });
+  if (!picked) return null;
+
+  const sameSession = sameExchangeDay(daily?.time, picked.time, gmtOffset);
+  const prevClose = firstPositive([
+    sameSession && closes.length >= 2 ? closes[closes.length - 2] : undefined,
+    !sameSession && closes.length >= 1 ? closes[closes.length - 1] : undefined,
+    meta?.previousClose,
+    meta?.regularMarketPreviousClose,
+  ]);
+  const change = prevClose != null ? picked.price - prevClose : meta?.regularMarketChange;
+  const changePct =
+    change != null && prevClose != null && prevClose !== 0 ? (change / prevClose) * 100 : meta?.regularMarketChangePercent;
+  const fast = smaWithWindow(closes, periods.smaFast);
+  const slow = smaWithWindow(closes, periods.smaSlow);
+  const highs = result.indicators?.quote?.[0]?.high ?? [];
+  const lows = result.indicators?.quote?.[0]?.low ?? [];
+  const lastHigh = [...highs].reverse().find((v) => v != null);
+  const lastLow = [...lows].reverse().find((v) => v != null);
+
+  return {
+    symbol,
+    regularMarketPrice: picked.price,
+    bid: meta?.bid,
+    ask: meta?.ask,
+    regularMarketChangePercent: changePct,
+    regularMarketChange: change,
+    previousClose: prevClose,
+    regularMarketTime: picked.time,
+    fiftyDayAverage: fast?.value ?? meta?.fiftyDayAverage,
+    twoHundredDayAverage: slow?.value ?? meta?.twoHundredDayAverage,
+    regularMarketDayHigh: firstPositive([meta?.regularMarketDayHigh, lastHigh]),
+    regularMarketDayLow: firstPositive([meta?.regularMarketDayLow, lastLow]),
+    closeCount: closes.length,
+    smaFastWindow: fast?.window,
+    smaSlowWindow: slow?.window,
+    exchangeTimezoneName: meta?.exchangeTimezoneName,
+  };
+}
+
+async function fetchSparkBatch(
+  symbols: string[],
+  periods: { smaFast: number; smaSlow: number },
+  range: string,
+): Promise<Map<string, YahooQuote>> {
+  const map = new Map<string, YahooQuote>();
+  const url = `${env.marketDataBaseUrl}/v7/finance/spark?symbols=${symbols.map(encodeURIComponent).join(",")}&range=${range}&interval=1d`;
+  const res = await yahooFetch(url);
+  if (!res?.ok) return map;
+  try {
+    const json = (await res.json()) as SparkResponse;
+    for (const row of json.spark?.result ?? []) {
+      const result = row.response?.[0];
+      const symbol = row.symbol ?? result?.meta?.symbol;
+      if (!symbol || !result) continue;
+      const quote = yahooQuoteFromSpark(symbol, result, periods);
+      if (!quote) continue;
+      map.set(symbol, quote);
+    }
+  } catch {
+    return map;
+  }
+  return map;
+}
+
+async function fetchSparkQuotes(
+  symbols: string[],
+  periods: { smaFast: number; smaSlow: number },
+): Promise<YahooQuote[]> {
+  const range = periods.smaSlow > 220 ? "2y" : "1y";
+  const maps = await Promise.all(chunk(symbols, SPARK_BATCH).map((batch) => fetchSparkBatch(batch, periods, range)));
+  const bySymbol = new Map<string, YahooQuote>();
+  for (const map of maps) {
+    for (const [symbol, quote] of map) bySymbol.set(symbol, quote);
+  }
+  return symbols.map((symbol) => bySymbol.get(symbol)).filter((row): row is YahooQuote => row != null);
+}
+
 export async function fetchYahooQuotes(
   symbols: string[],
   periods = { smaFast: 50, smaSlow: 200 },
   opts: QuoteFetchOptions = {},
 ): Promise<YahooQuote[]> {
-  const rows = await mapPool(symbols, env.scanConcurrency, (symbol) => fetchChart(symbol, periods, opts));
-  return rows.filter((row): row is YahooQuote => row != null);
+  if (opts.prefer1m) {
+    const rows = await mapPool(symbols, env.scanConcurrency, (symbol) => fetchChart(symbol, periods, opts));
+    return rows.filter((row): row is YahooQuote => row != null);
+  }
+
+  const started = Date.now();
+  let quotes = await fetchSparkQuotes(symbols, periods);
+  let path: "spark" | "chart" = "spark";
+
+  if (quotes.length === 0) {
+    path = "chart";
+    const rows = await mapPool(symbols, env.scanConcurrency, async (symbol) => {
+      if (Date.now() - started > SCAN_BUDGET_MS) return null;
+      return fetchChart(symbol, periods, opts);
+    });
+    quotes = rows.filter((row): row is YahooQuote => row != null);
+  }
+
+  console.info("[arcverdict:quotes]", {
+    requested: symbols.length,
+    quoted: quotes.length,
+    ms: Date.now() - started,
+    path,
+  });
+  return quotes;
 }
 
 export function quoteBySymbol(quotes: YahooQuote[], symbol: string) {
