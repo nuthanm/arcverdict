@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { ActionBadge } from "@/components/ActionBadge";
 import { DeskStatus } from "@/components/DeskStatus";
 import { FillNowCell } from "@/components/FillNowCell";
-import { HintCorner } from "@/components/InfoTip";
+import { HintCorner, HintLabel } from "@/components/InfoTip";
 import { ConvictionChangeTiles, HintStat, HintTh } from "@/components/HintStat";
 import { InstructionPanel } from "@/components/InstructionPanel";
 import { MarketClosed } from "@/components/MarketClosed";
@@ -24,6 +24,7 @@ import {
   showEnterFill,
   showExitFill,
   showStopLevel,
+  signedInr,
   stanceBar,
   stanceLabel,
 } from "@/lib/format";
@@ -108,7 +109,7 @@ export function EquitiesDesk() {
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}
 
       {session && !session.open && <MarketClosed session={session} />}
-      {session?.open && !data && loading && (
+      {!data && loading && (
         <p className="border border-[var(--line)] bg-white px-4 py-6 text-sm text-[var(--muted)]">
           Loading NSE book…
         </p>
@@ -119,14 +120,15 @@ export function EquitiesDesk() {
         <p className="mt-0.5 text-xs text-[var(--muted)]">{NIFTY_UNIVERSE_NOTE}</p>
         <p className="mt-0.5 text-xs text-[var(--muted)]">{DESK_UNIVERSE_NOTE}</p>
         <p className="mt-0.5 text-xs text-[var(--muted)]">{NSE_LISTED_SNAPSHOT}</p>
-        {session?.open && data?.ok ? (
+        {data?.ok ? (
           <p className="mt-0.5 text-xs text-[var(--muted)]">
             {data.quoted ?? 0}/{data.universe ?? 0} quoted · {transactN} enter/exit
+            {data.marketClosed ? " · close snapshot" : ""}
           </p>
         ) : null}
       </div>
 
-      {session?.open && data?.ok && data.counts && (
+      {data?.ok && data.counts && (
         <>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {ACTIONS.map((key, index) => (
@@ -176,30 +178,30 @@ export function EquitiesDesk() {
         </>
       )}
 
-      {picked && session?.open && (
-        <section className="overflow-hidden border border-[var(--line)] bg-white">
+      {picked && data?.ok && (
+        <article className="relative overflow-hidden border border-[var(--line)] bg-white">
           <div className={`h-1.5 ${stanceBar(actionStance(picked.action))}`} />
-          <div className="relative p-4 pr-10">
-            <HintCorner tipKey="ltp" />
+          <HintCorner tipKey="ltp" />
+          <div className="px-4 pb-4 pt-6 pr-10 sm:px-5 sm:pr-11">
             <p className="font-mono text-[11px] text-[var(--muted)]">
               {picked.ticker} · {picked.kind === "etf" ? "ETF" : "Equity"}
             </p>
-            <div className="mt-1 flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
-              <div>
+            <div className="mt-1 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+              <div className="min-w-0">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <h2 className="text-lg text-[var(--ink)]">{picked.name}</h2>
+                  <h2 className="text-2xl tracking-tight text-[var(--ink)]">{picked.name}</h2>
                   <p className={`text-sm ${actionClass(picked.action)}`}>{stanceLabel(picked.action)}</p>
                 </div>
               </div>
-              <div className="shrink-0 text-right">
+              <div className="shrink-0 pr-4 text-right">
                 <p className={`font-mono text-3xl leading-none ${changeClass(picked.changePct)}`}>{inr(picked.last)}</p>
                 <p className="mt-1 text-xs text-[var(--muted)]">LTP · NSE last</p>
-                {picked.asOf ? (
-                  <p className="mt-0.5 text-xs text-[var(--muted)]">{pricesAsOf(picked.asOf)}</p>
-                ) : null}
               </div>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+
+            {picked.last != null ? <NseQuoteBoard row={picked} /> : null}
+
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               {showEnterFill(picked.action) && (
                 <HintStat
                   value={inr(picked.buyAt)}
@@ -230,7 +232,7 @@ export function EquitiesDesk() {
               footer={equityQuoteNote(picked.priceSource)}
             />
           </div>
-        </section>
+        </article>
       )}
     </div>
   );
@@ -307,7 +309,14 @@ function BookTable({
                   <td className="px-3 py-1.5 font-mono">{r.ticker}</td>
                   <td className="px-3 py-1.5">{r.name}</td>
                   <td className="px-3 py-1.5 text-[var(--muted)]">{r.kind === "etf" ? "ETF" : "Equity"}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">{inr(r.last)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono">
+                    {inr(r.last)}
+                    {r.asOf ? (
+                      <span className="mt-0.5 block text-[11px] font-sans text-[var(--muted)]">
+                        {pricesAsOf(r.asOf)}
+                      </span>
+                    ) : null}
+                  </td>
                   <FillNowCell
                     action={r.action}
                     buyLabel={r.last == null ? null : inr(r.buyAt)}
@@ -327,5 +336,51 @@ function BookTable({
         </div>
       )}
     </section>
+  );
+}
+
+function NseQuoteBoard({ row }: { row: ScanRow }) {
+  return (
+    <div className="mt-4 overflow-x-auto border border-[var(--line)] bg-[var(--wash)]">
+      <table className="w-full min-w-[22rem] text-left text-xs">
+        <caption className="sr-only">NSE last, change, close, high, low, and last trade time</caption>
+        <thead className="text-[11px] tracking-wide text-[var(--muted)]">
+          <tr>
+            <th className="whitespace-nowrap px-3 py-1.5 font-medium">Quote</th>
+            <th className="whitespace-nowrap px-3 py-1.5 text-right font-medium">NSE</th>
+          </tr>
+        </thead>
+        <tbody className="bg-white text-[var(--ink)]">
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Last</th>
+            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(row.changePct)}`}>{inr(row.last)}</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Change</th>
+            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(row.changePct)}`}>
+              {signedInr(row.changeInr)} {pct(row.changePct)}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">
+              <HintLabel tipKey="nseClose">Close</HintLabel>
+            </th>
+            <td className="px-3 py-1.5 text-right font-mono">{inr(row.prevClose)}</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">High</th>
+            <td className="px-3 py-1.5 text-right font-mono">{inr(row.dayHigh)}</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Low</th>
+            <td className="px-3 py-1.5 text-right font-mono">{inr(row.dayLow)}</td>
+          </tr>
+          <tr className="border-t border-[var(--line)]">
+            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Last trade</th>
+            <td className="px-3 py-1.5 text-right font-mono">{row.asOf ?? "—"}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   );
 }

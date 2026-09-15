@@ -13,6 +13,10 @@ export type ScanRow = {
   sellAt: number | null;
   priceSource: PriceSource;
   changePct: number | null;
+  changeInr: number | null;
+  prevClose: number | null;
+  dayHigh: number | null;
+  dayLow: number | null;
   smaFast: number | null;
   smaSlow: number | null;
   action: Action;

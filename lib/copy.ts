@@ -20,6 +20,8 @@ export const ETF_LISTING_BASIS =
   "NSE-listed. Shown because they are in this desk’s universe and this snapshot returned a last. Not NSE official.";
 export const LEGAL_MARKET_NOTE =
   "Nifty 500 names and India ETFs are NSE-listed. This is a reference snapshot, not an NSE official feed. Gold, silver and copper are COMEX futures (USD/INR) — COMEX futures snapshot, not MCX / not NSE. Metals are not NSE cash.";
+export const SESSION_CLOSED_SNAPSHOT =
+  "Session is shut. This is the last snapshot until the next open.";
 
 export type TipBody = {
   title: string;
@@ -147,13 +149,13 @@ export const TIPS = {
     title: "Session status",
     meaning:
       "This line says whether live prices are being taken. On Nifty 500 it is the NSE India equity session (9:15 am–3:30 pm IST, Monday–Friday). On gold, silver and copper it is US metals futures on COMEX (CME Globex), timed in Chicago — not the Indian MCX and not NSE cash. COMEX runs Sunday 5:00 pm – Friday 4:00 pm Chicago time, with a daily pause 4–5 pm. Indian Standard Time is about 10½ hours ahead of Chicago. An NSE holiday does not close COMEX.",
-    act: "Treat enter/exit as live research only while the session is open. Snapshots refresh on the cadence in Settings. Place orders with your official broker.",
-    avoid: "Do not place orders from this site, and do not use a closed-session screen as a ticket. Quotes are not requested while the session is shut. NSE holidays do not close COMEX.",
+    act: "Treat enter/exit as live research only while the session is open. After the bell, the desk keeps the last snapshot until the next open. Snapshots refresh on the cadence in Settings while live. Place orders with your official broker.",
+    avoid: "Do not place orders from this site, and do not use a closed-session screen as a live ticket. NSE holidays do not close COMEX.",
   },
   change: {
     title: "Change",
     meaning:
-      "Last minus Close (previous settlement), as a dollar amount on COMEX and a percent on both columns. Green is up versus that close; red is down.",
+      "Last minus Close. On Nifty 500 the quote board shows the rupee amount and percent; the book shows percent. On COMEX the board shows the dollar amount and percent. Green is up versus that close; red is down.",
     act: "Use it as tape context next to the action — a green day does not by itself mean BUY.",
     avoid: "Do not trade on the day’s change alone. The action is driven by trend versus the fast and slow averages.",
   },
@@ -164,6 +166,13 @@ export const TIPS = {
     act: "Read Change as last minus this Close. High and low stay this session’s range.",
     avoid:
       "Do not treat Close as the live last print. A prior session last (for example 4408.90) is not the Close when the board shows settlement near today’s open.",
+  },
+  nseClose: {
+    title: "Close",
+    meaning:
+      "Previous NSE session close, not last trade. Change is last minus this Close. High and low are this session’s range.",
+    act: "Read Change as last minus this Close.",
+    avoid: "Do not treat Close as the live last print.",
   },
 } satisfies Record<string, TipBody>;
 

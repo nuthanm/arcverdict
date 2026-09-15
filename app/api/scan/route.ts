@@ -1,7 +1,7 @@
-import { emptyCounts, engineParams } from "@/lib/api";
+import { engineParams } from "@/lib/api";
 import { NSE_NOT_IN_SNAPSHOT } from "@/lib/copy";
 import { classify } from "@/lib/engine";
-import { env } from "@/lib/env";
+import { formatNseLastTrade } from "@/lib/format";
 import { executablePrices } from "@/lib/prices";
 import { formatIst, nseSession } from "@/lib/session";
 import type { ScanRow } from "@/lib/types";
@@ -13,17 +13,6 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const session = nseSession();
-  if (!session.open && !env.allowClosedMarketFetch) {
-    return Response.json({
-      ok: true,
-      marketClosed: true,
-      session,
-      universe: NIFTY_UNIVERSE.length,
-      quoted: 0,
-      counts: emptyCounts(),
-      rows: [],
-    });
-  }
 
   try {
     const params = engineParams(new URL(request.url).searchParams);
@@ -38,6 +27,12 @@ export async function GET(request: Request) {
       const kind = u.kind ?? "equity";
       const q = bySymbol.get(nseSymbol(u.ticker));
       const last = q?.regularMarketPrice ?? null;
+      const prevClose = q?.previousClose ?? null;
+      const changeInr =
+        last != null && prevClose != null ? last - prevClose : (q?.regularMarketChange ?? null);
+      const changePct =
+        q?.regularMarketChangePercent ??
+        (last != null && prevClose != null && prevClose !== 0 ? ((last - prevClose) / prevClose) * 100 : null);
       const exec = executablePrices({ last, bid: q?.bid, ask: q?.ask, kind });
       const decision = classify({
         last,
@@ -53,7 +48,7 @@ export async function GET(request: Request) {
         lastMissingWhy: NSE_NOT_IN_SNAPSHOT,
       });
       const asOf =
-        q?.regularMarketTime != null ? formatIst(new Date(q.regularMarketTime * 1000)) : runAt;
+        q?.regularMarketTime != null ? formatNseLastTrade(q.regularMarketTime) : formatNseLastTrade(Date.now() / 1000);
       return {
         ticker: u.ticker,
         name: u.name,
@@ -62,7 +57,11 @@ export async function GET(request: Request) {
         buyAt: exec.buyAt,
         sellAt: exec.sellAt,
         priceSource: exec.priceSource,
-        changePct: q?.regularMarketChangePercent ?? null,
+        changePct,
+        changeInr,
+        prevClose,
+        dayHigh: q?.regularMarketDayHigh ?? null,
+        dayLow: q?.regularMarketDayLow ?? null,
         smaFast: q?.fiftyDayAverage ?? null,
         smaSlow: q?.twoHundredDayAverage ?? null,
         action: decision.action,
@@ -83,7 +82,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       ok: true,
-      marketClosed: false,
+      marketClosed: !session.open,
       runAt,
       session,
       universe: NIFTY_UNIVERSE.length,

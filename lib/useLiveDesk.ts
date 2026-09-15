@@ -78,15 +78,17 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
 
   useEffect(() => {
     if (!ready || !session) return;
-    if (!session.open) {
-      setData(null);
-      setFetchedAt(null);
-      return;
-    }
     const ac = new AbortController();
     abortRef.current = ac;
     inFlight.current = false;
     void loadBook();
+    if (!session.open) {
+      return () => {
+        ac.abort();
+        if (abortRef.current === ac) abortRef.current = null;
+        inFlight.current = false;
+      };
+    }
     const interval = refreshMs(settings.refreshMode, settings.continuousSeconds);
     if (!interval) {
       return () => {
@@ -105,7 +107,7 @@ export function useLiveDesk<T extends { marketClosed?: boolean; ok?: boolean }>(
     };
   }, [ready, session?.open, settings.refreshMode, settings.continuousSeconds, loadBook]);
 
-  const showRun = Boolean(session?.open && settings.refreshMode === "manual");
+  const showRun = Boolean(session && (!session.open || settings.refreshMode === "manual"));
   const intervalSec = refreshMs(settings.refreshMode, settings.continuousSeconds) / 1000;
 
   return { session, data, loading, error, loadBook, showRun, fetchedAt, intervalSec };

@@ -1,7 +1,6 @@
 import { engineParams } from "@/lib/api";
 import { COMEX_LAST_MISSING, NSE_NOT_IN_SNAPSHOT } from "@/lib/copy";
 import { classify } from "@/lib/engine";
-import { env } from "@/lib/env";
 import { formatLastTradeStamp } from "@/lib/format";
 import { executablePrices } from "@/lib/prices";
 import { comexSession, formatIst } from "@/lib/session";
@@ -15,16 +14,6 @@ export const revalidate = 0;
 
 export async function GET(request: Request) {
   const session = comexSession();
-  if (!session.open && !env.allowClosedMarketFetch) {
-    return Response.json({
-      ok: true,
-      marketClosed: true,
-      session,
-      metals: [],
-      usdInr: null,
-      usdInrSource: null,
-    });
-  }
 
   try {
     const params = engineParams(new URL(request.url).searchParams);
@@ -168,7 +157,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       ok: true,
-      marketClosed: false,
+      marketClosed: !session.open,
       runAt,
       usdInr,
       usdInrSource,
