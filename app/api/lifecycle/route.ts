@@ -1,8 +1,11 @@
+import { refreshLifecycleBook } from "@/lib/lifecycle-book";
 import { lifecycleBook, lifecycleDaily, suggestionCounts } from "@/lib/lifecycle";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
+  await refreshLifecycleBook();
   const company = new URL(request.url).searchParams.get("company");
   const rows = lifecycleBook();
   const asOf = rows.find((row) => row.date)?.date ?? null;

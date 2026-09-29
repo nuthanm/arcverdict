@@ -131,7 +131,7 @@ export function EquitiesDesk() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         <span className="font-mono text-xs text-[var(--muted)]">
-          Trend lifecycle · {data?.universe ?? "—"} names
+          NSE daily history · {data?.universe ?? "—"} names
           {data?.asOf ? ` · as of ${data.asOf}` : ""}
         </span>
         {loading && <span className="text-xs text-[var(--muted)]">Loading book…</span>}

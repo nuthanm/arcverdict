@@ -90,6 +90,10 @@ function loadStore(): Store {
   return store;
 }
 
+export function clearLifecycleCache() {
+  store = null;
+}
+
 export function lifecycleBook() {
   return loadStore().latest;
 }
