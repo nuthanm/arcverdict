@@ -13,6 +13,7 @@ export type YahooQuote = {
   twoHundredDayAverage?: number;
   regularMarketDayHigh?: number;
   regularMarketDayLow?: number;
+  regularMarketOpen?: number;
   closeCount?: number;
   smaFastWindow?: number;
   smaSlowWindow?: number;
@@ -92,6 +93,7 @@ type QuoteResult = {
   twoHundredDayAverage?: number;
   regularMarketDayHigh?: number;
   regularMarketDayLow?: number;
+  regularMarketOpen?: number;
   regularMarketPreviousClose?: number;
   regularMarketChange?: number;
 };
@@ -532,6 +534,11 @@ async function fetchChart(
     twoHundredDayAverage: slow?.value ?? dailyResult.meta?.twoHundredDayAverage,
     regularMarketDayHigh: dayHigh,
     regularMarketDayLow: dayLow,
+    regularMarketOpen: firstPositive([
+      dailyResult.meta?.regularMarketOpen,
+      intradayResult?.meta?.regularMarketOpen,
+      shortDaily?.meta?.regularMarketOpen,
+    ]),
     closeCount: closes.length,
     smaFastWindow: fast?.window,
     smaSlowWindow: slow?.window,
@@ -582,6 +589,7 @@ function yahooQuoteFromRow(row: QuoteResult, fallbackSymbol: string): YahooQuote
     twoHundredDayAverage: row.twoHundredDayAverage,
     regularMarketDayHigh: row.regularMarketDayHigh,
     regularMarketDayLow: row.regularMarketDayLow,
+    regularMarketOpen: row.regularMarketOpen,
     closeCount: 0,
   };
 }
@@ -728,6 +736,7 @@ function yahooQuoteFromSpark(
     twoHundredDayAverage: slow?.value ?? meta?.twoHundredDayAverage,
     regularMarketDayHigh: firstPositive([meta?.regularMarketDayHigh, lastHigh]),
     regularMarketDayLow: firstPositive([meta?.regularMarketDayLow, lastLow]),
+    regularMarketOpen: meta?.regularMarketOpen,
     closeCount: closes.length,
     smaFastWindow: fast?.window,
     smaSlowWindow: slow?.window,

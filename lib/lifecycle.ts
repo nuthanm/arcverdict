@@ -98,15 +98,12 @@ export function lifecycleBook() {
   return loadStore().latest;
 }
 
+export function lifecycleHistory() {
+  const loaded = loadStore();
+  return { latest: loaded.latest, daily: loaded.daily };
+}
+
 export function lifecycleDaily(company: string) {
   return loadStore().daily[company] ?? [];
 }
 
-export function suggestionCounts(rows: LifecycleRow[]) {
-  const counts: Record<string, number> = {};
-  for (const row of rows) {
-    const key = row.suggestion ?? "Unknown";
-    counts[key] = (counts[key] ?? 0) + 1;
-  }
-  return counts;
-}
