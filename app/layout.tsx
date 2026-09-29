@@ -17,7 +17,7 @@ const mono = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: "ARCV · ArcVerdict",
-  description: "Nifty 500 and metals research desk. Educational overlay — not an order ticket.",
+  description: "Trend lifecycle book for the NSE universe, with gold, silver, and copper desks. Educational overlay — not an order ticket.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

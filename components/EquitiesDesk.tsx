@@ -1,239 +1,272 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ActionBadge } from "@/components/ActionBadge";
-import { DeskStatus } from "@/components/DeskStatus";
-import { FillNowCell } from "@/components/FillNowCell";
-import { HintCorner, HintLabel } from "@/components/InfoTip";
-import { ConvictionChangeTiles, HintStat, HintTh } from "@/components/HintStat";
-import { InstructionPanel } from "@/components/InstructionPanel";
-import { MarketClosed } from "@/components/MarketClosed";
-import { DESK_UNIVERSE_NOTE, NIFTY_UNIVERSE_NOTE, NSE_LISTED_SNAPSHOT } from "@/lib/copy";
-import {
-  actionBorder,
-  actionClass,
-  actionStance,
-  actionWash,
-  changeClass,
-  convictionClass,
-  convictionPct,
-  equityQuoteNote,
-  inr,
-  meanConviction,
-  pct,
-  showEnterFill,
-  showExitFill,
-  showStopLevel,
-  signedInr,
-  stanceBar,
-  stanceLabel,
-} from "@/lib/format";
-import { pricesAsOf } from "@/lib/session";
-import type { Action, ScanRow } from "@/lib/types";
-import { useDeskSettings } from "@/lib/useDeskSettings";
-import { useLiveDesk } from "@/lib/useLiveDesk";
+import { useEffect, useMemo, useState } from "react";
+import { inr } from "@/lib/format";
+import type { DailyLifecycleRow, LifecycleRow } from "@/lib/lifecycle";
 
-type ScanResponse = {
+type BookResponse = {
   ok: boolean;
   error?: string;
-  marketClosed?: boolean;
-  runAt?: string;
-  session?: { label: string; hours: string; open: boolean };
+  asOf?: string | null;
   universe?: number;
-  quoted?: number;
-  counts?: Record<Action, number>;
-  rows?: ScanRow[];
+  counts?: Record<string, number>;
+  rows?: LifecycleRow[];
 };
 
-type View = "transact" | "manage" | "all";
+type DetailResponse = {
+  ok: boolean;
+  daily?: DailyLifecycleRow[];
+};
 
-const ACTIONS: Action[] = ["BUY", "SELL", "HOLD", "WATCH", "NONE"];
+type View = "act" | "monitor" | "all";
+
+function suggestionClass(suggestion: string | null) {
+  if (!suggestion || suggestion.startsWith("INSUFFICIENT")) return "text-[var(--muted)]";
+  if (suggestion.startsWith("POTENTIAL ENTRY")) return "text-[var(--buy)]";
+  if (suggestion.startsWith("CAUTION")) return "text-[var(--sell)]";
+  return "text-[var(--watch)]";
+}
+
+function healthClass(state: string | null) {
+  if (state === "Healthy" || state === "Extreme Strong") return "text-[var(--buy)]";
+  if (state === "Deteriorating" || state === "Weakening") return "text-[var(--sell)]";
+  if (state === "Transition") return "text-[var(--watch)]";
+  return "text-[var(--muted)]";
+}
+
+function isEntry(suggestion: string | null) {
+  return suggestion?.startsWith("POTENTIAL ENTRY") ?? false;
+}
+
+function isCaution(suggestion: string | null) {
+  return suggestion?.startsWith("CAUTION") ?? false;
+}
+
+function isMonitor(suggestion: string | null) {
+  return suggestion != null && !isEntry(suggestion) && !isCaution(suggestion) && !suggestion.startsWith("INSUFFICIENT");
+}
+
+function num(value: number | null | undefined, digits = 1) {
+  if (value == null || Number.isNaN(value)) return "—";
+  return value.toLocaleString("en-IN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
 
 export function EquitiesDesk() {
-  const { settings, ready } = useDeskSettings();
-  const { session, data, loading, error, loadBook, showRun, fetchedAt, intervalSec } = useLiveDesk<ScanResponse>({
-    market: "nse",
-    path: "/api/scan",
-    settings,
-    ready,
-  });
-  const [view, setView] = useState<View>("transact");
+  const [data, setData] = useState<BookResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<View>("act");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [daily, setDaily] = useState<DailyLifecycleRow[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/lifecycle", { cache: "no-store" })
+      .then(async (res) => {
+        const body = (await res.json()) as BookResponse;
+        if (!res.ok || !body.ok) throw new Error(body.error ?? "Lifecycle book failed");
+        if (!cancelled) setData(body);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Lifecycle book failed");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setDaily([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/lifecycle?company=${encodeURIComponent(selected)}`, { cache: "no-store" })
+      .then(async (res) => {
+        const body = (await res.json()) as DetailResponse;
+        if (!cancelled) setDaily(body.daily ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setDaily([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
 
   const rows = data?.rows ?? [];
-  const filtered = rows.filter((r) => {
+  const filtered = rows.filter((row) => {
     const q = query.trim().toUpperCase();
-    return !q || r.ticker.includes(q) || r.name.toUpperCase().includes(q);
+    return !q || row.company.includes(q);
   });
 
-  const groups = useMemo(() => {
-    return {
-      buy: filtered.filter((r) => r.action === "BUY"),
-      sell: filtered.filter((r) => r.action === "SELL"),
-      hold: filtered.filter((r) => r.action === "HOLD"),
-      watch: filtered.filter((r) => r.action === "WATCH"),
-      none: filtered.filter((r) => r.action === "NONE"),
-    };
-  }, [filtered]);
+  const groups = useMemo(
+    () => ({
+      entry: filtered.filter((row) => isEntry(row.suggestion)),
+      caution: filtered.filter((row) => isCaution(row.suggestion)),
+      monitor: filtered.filter((row) => isMonitor(row.suggestion)),
+      quiet: filtered.filter((row) => row.suggestion?.startsWith("INSUFFICIENT")),
+    }),
+    [filtered],
+  );
 
-  const bucketConviction = useMemo(() => {
-    const acc = { BUY: [], SELL: [], HOLD: [], WATCH: [], NONE: [] } as Record<Action, number[]>;
-    for (const row of rows) acc[row.action].push(row.conviction);
-    return {
-      BUY: meanConviction(acc.BUY),
-      SELL: meanConviction(acc.SELL),
-      HOLD: meanConviction(acc.HOLD),
-      WATCH: meanConviction(acc.WATCH),
-      NONE: meanConviction(acc.NONE),
-    };
-  }, [rows]);
-
-  const picked = rows.find((r) => r.ticker === selected) ?? null;
-
-  const transactN = (data?.counts?.BUY ?? 0) + (data?.counts?.SELL ?? 0);
+  const picked = rows.find((row) => row.company === selected) ?? null;
+  const counts = data?.counts ?? {};
+  const entryCount = Object.entries(counts)
+    .filter(([key]) => key.startsWith("POTENTIAL ENTRY"))
+    .reduce((sum, [, n]) => sum + n, 0);
+  const cautionCount = Object.entries(counts)
+    .filter(([key]) => key.startsWith("CAUTION"))
+    .reduce((sum, [, n]) => sum + n, 0);
+  const monitorCount = Object.entries(counts)
+    .filter(([key]) => isMonitor(key))
+    .reduce((sum, [, n]) => sum + n, 0);
+  const quietCount = counts["INSUFFICIENT DATA - DO NOT INTERPRET"] ?? 0;
 
   return (
-    <div className="space-y-4">
-      <DeskStatus
-        session={session}
-        fallbackLabel="NSE India equity session"
-        runAt={data?.runAt}
-        loading={loading}
-        showRun={showRun}
-        onRefresh={loadBook}
-        intervalSec={intervalSec}
-        fetchedAt={fetchedAt}
-      />
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="font-mono text-xs text-[var(--muted)]">
+          Trend lifecycle · {data?.universe ?? "—"} names
+          {data?.asOf ? ` · as of ${data.asOf}` : ""}
+        </span>
+        {loading && <span className="text-xs text-[var(--muted)]">Loading book…</span>}
+      </div>
 
       {error && <p className="border border-red-200 bg-white px-4 py-3 text-sm text-red-700">{error}</p>}
 
-      {session && !session.open && <MarketClosed session={session} />}
-      {!data && loading && (
-        <p className="border border-[var(--line)] bg-white px-4 py-6 text-sm text-[var(--muted)]">
-          Loading NSE book…
-        </p>
-      )}
-
-      <div>
-        <h1 className="text-2xl tracking-tight text-[var(--ink)]">Nifty 500</h1>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">{NIFTY_UNIVERSE_NOTE}</p>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">{DESK_UNIVERSE_NOTE}</p>
-        <p className="mt-0.5 text-xs text-[var(--muted)]">{NSE_LISTED_SNAPSHOT}</p>
-        {data?.ok ? (
-          <p className="mt-0.5 text-xs text-[var(--muted)]">
-            {data.quoted ?? 0}/{data.universe ?? 0} quoted · {transactN} enter/exit
-            {data.marketClosed ? " · close snapshot" : ""}
-          </p>
-        ) : null}
-      </div>
-
-      {data?.ok && data.counts && (
+      {data?.ok && (
         <>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-            {ACTIONS.map((key, index) => (
-              <div
-                key={key}
-                className={`relative border border-[var(--line)] border-l-4 px-3 py-2.5 pr-7 ${actionBorder(key)} ${actionWash(key)}`}
-              >
-                <HintCorner tipKey={key} align={index >= 3 ? "end" : "start"} />
-                <p className={`font-mono text-xl leading-tight ${actionClass(key)}`}>{data.counts?.[key] ?? 0}</p>
-                <p className={`mt-1 text-[11px] ${actionClass(key)}`}>{key}</p>
-                <p className={`mt-1 font-mono text-[11px] ${convictionClass(bucketConviction[key])}`}>
-                  Conv. {convictionPct(bucketConviction[key])}
-                </p>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Count label="Potential entry" value={entryCount} tone="text-[var(--buy)]" />
+            <Count label="Caution" value={cautionCount} tone="text-[var(--sell)]" />
+            <Count label="Monitor" value={monitorCount} tone="text-[var(--watch)]" />
+            <Count label="Insufficient data" value={quietCount} tone="text-[var(--muted)]" />
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <Toggle label="Enter or exit" active={view === "transact"} onClick={() => setView("transact")} />
-            <Toggle label="Hold / watch" active={view === "manage"} onClick={() => setView("manage")} />
+            <Toggle label="Act" active={view === "act"} onClick={() => setView("act")} />
+            <Toggle label="Monitor" active={view === "monitor"} onClick={() => setView("monitor")} />
             <Toggle label="Full book" active={view === "all"} onClick={() => setView("all")} />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search ticker"
+              placeholder="Search symbol"
               className="min-w-[180px] flex-1 border border-[var(--line)] bg-white px-3 py-1.5 text-sm outline-none"
             />
           </div>
 
-          {(view === "transact" || view === "all") && (
-            <BookTable title="Enter" rows={groups.buy} selected={selected} onSelect={setSelected} />
+          {(view === "act" || view === "all") && (
+            <BookTable title="Potential entry" rows={groups.entry} selected={selected} onSelect={setSelected} />
           )}
-          {(view === "transact" || view === "all") && (
-            <BookTable title="Exit" rows={groups.sell} selected={selected} onSelect={setSelected} />
+          {(view === "act" || view === "all") && (
+            <BookTable title="Caution" rows={groups.caution} selected={selected} onSelect={setSelected} />
           )}
-          {(view === "manage" || view === "all") && (
-            <BookTable
-              title="Hold / watch"
-              rows={[...groups.hold, ...groups.watch]}
-              selected={selected}
-              onSelect={setSelected}
-            />
+          {(view === "monitor" || view === "all") && (
+            <BookTable title="Monitor" rows={groups.monitor} selected={selected} onSelect={setSelected} />
           )}
           {view === "all" && (
-            <BookTable title="No instruction" rows={groups.none} selected={selected} onSelect={setSelected} />
+            <BookTable title="Insufficient data" rows={groups.quiet} selected={selected} onSelect={setSelected} />
           )}
         </>
       )}
 
-      {picked && data?.ok && (
-        <article className="relative overflow-hidden border border-[var(--line)] bg-white">
-          <div className={`h-1.5 ${stanceBar(actionStance(picked.action))}`} />
-          <HintCorner tipKey="ltp" />
-          <div className="px-4 pb-4 pt-6 pr-10 sm:px-5 sm:pr-11">
-            <p className="font-mono text-[11px] text-[var(--muted)]">
-              {picked.ticker} · {picked.kind === "etf" ? "ETF" : "Equity"}
-            </p>
-            <div className="mt-1 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <h2 className="text-2xl tracking-tight text-[var(--ink)]">{picked.name}</h2>
-                  <p className={`text-sm ${actionClass(picked.action)}`}>{stanceLabel(picked.action)}</p>
-                </div>
-              </div>
-              <div className="shrink-0 pr-4 text-right">
-                <p className={`font-mono text-3xl leading-none ${changeClass(picked.changePct)}`}>{inr(picked.last)}</p>
-                <p className="mt-1 text-xs text-[var(--muted)]">LTP · NSE last</p>
-              </div>
-            </div>
-
-            {picked.last != null ? <NseQuoteBoard row={picked} /> : null}
-
-            <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {showEnterFill(picked.action) && (
-                <HintStat
-                  value={inr(picked.buyAt)}
-                  label="Enter at"
-                  tipKey="enterAt"
-                  className={actionClass("BUY")}
-                  wash="bg-[var(--buy-wash)]"
-                />
-              )}
-              {showExitFill(picked.action) && (
-                <HintStat
-                  value={inr(picked.sellAt)}
-                  label="Exit at"
-                  tipKey="exitAt"
-                  className={actionClass("SELL")}
-                  wash="bg-[var(--sell-wash)]"
-                />
-              )}
-              {showStopLevel(picked.action) && (
-                <HintStat value={inr(picked.stop)} label="Protective stop" tipKey="stop" wash="bg-[var(--wash)]" />
-              )}
-              <ConvictionChangeTiles conviction={picked.conviction} changePct={picked.changePct} />
-            </div>
-            <InstructionPanel
-              className="mt-4"
-              action={picked.action}
-              why={picked.why}
-              footer={equityQuoteNote(picked.priceSource)}
+      {picked && (
+        <section className="border border-[var(--line)] bg-white p-4">
+          <p className="font-mono text-xs text-[var(--muted)]">
+            {picked.company} · {picked.date}
+          </p>
+          <h2 className="mt-1 text-lg text-[var(--ink)]">{picked.company}</h2>
+          <p className={`mt-3 text-sm ${suggestionClass(picked.suggestion)}`}>{picked.suggestion}</p>
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            <Stat label="Close" value={inr(picked.close)} />
+            <Stat label="Health" value={num(picked.healthScore)} className={healthClass(picked.healthState)} />
+            <Stat label="State" value={picked.healthState ?? "—"} className={healthClass(picked.healthState)} />
+            <Stat label="Pressure" value={picked.pressure ?? "—"} />
+            <Stat label="Pressure 1D" value={num(picked.healthPressure1d)} />
+            <Stat label="Pressure 5D" value={num(picked.healthPressure5d)} />
+            <Stat label="Structure" value={picked.structureState ?? "—"} />
+            <Stat label="Candidate" value={picked.candidateStatus ?? "—"} />
+            <Stat label="Decay" value={picked.decayStatus ?? "—"} />
+            <Stat label="Lower high / low" value={`${picked.lowerHigh ? "Yes" : "No"} / ${picked.lowerLow ? "Yes" : "No"}`} />
+            <Stat
+              label="History"
+              value={
+                picked.research
+                  ? `${picked.research.candidateRows ?? 0} candidate · ${picked.research.confirmedDecayRows ?? 0} decay`
+                  : "—"
+              }
             />
-          </div>
-        </article>
+            <Stat label="Trend" value={picked.metrics ? `${picked.metrics.trend ?? "—"} · ${picked.metrics.trendScore ?? "—"}` : "—"} />
+          </dl>
+          {picked.metrics && (
+            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-[var(--line)] pt-4 text-sm sm:grid-cols-4">
+              <Stat label="Running sum" value={num(picked.metrics.runningSum)} />
+              <Stat label="RSI 14" value={num(picked.metrics.rsi)} />
+              <Stat label="ADX" value={num(picked.metrics.adx)} />
+              <Stat label="ATR %" value={num(picked.metrics.atrPct)} />
+              <Stat label="EMA 20" value={inr(picked.metrics.ema20)} />
+              <Stat label="EMA 50" value={inr(picked.metrics.ema50)} />
+              <Stat label="EMA 200" value={picked.metrics.ema200 ? inr(picked.metrics.ema200) : "—"} />
+              <Stat label="Bollinger position" value={num(picked.metrics.bbPosition, 2)} />
+            </dl>
+          )}
+          {daily.length > 0 && (
+            <div className="mt-4 overflow-x-auto border border-[var(--line)]">
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Date</th>
+                    <th className="px-3 py-2 font-medium text-right">Close</th>
+                    <th className="px-3 py-2 font-medium text-right">Health</th>
+                    <th className="px-3 py-2 font-medium">State</th>
+                    <th className="px-3 py-2 font-medium">Pressure</th>
+                    <th className="px-3 py-2 font-medium">Structure</th>
+                    <th className="px-3 py-2 font-medium">Suggestion</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...daily].reverse().map((row) => (
+                    <tr key={row.date} className="border-t border-[var(--line)]">
+                      <td className="px-3 py-2 font-mono text-xs">{row.date}</td>
+                      <td className="px-3 py-2 text-right font-mono">{inr(row.close)}</td>
+                      <td className={`px-3 py-2 text-right font-mono ${healthClass(row.healthState)}`}>
+                        {num(row.healthScore)}
+                      </td>
+                      <td className="px-3 py-2">{row.healthState ?? "—"}</td>
+                      <td className="px-3 py-2">{row.pressure ?? "—"}</td>
+                      <td className="px-3 py-2">{row.structureState ?? "—"}</td>
+                      <td className={`px-3 py-2 ${suggestionClass(row.suggestion)}`}>{row.suggestion ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       )}
+    </div>
+  );
+}
+
+function Count({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className="border border-[var(--line)] bg-white px-3 py-3">
+      <p className={`font-mono text-xl ${tone}`}>{value}</p>
+      <p className="text-xs text-[var(--muted)]">{label}</p>
+    </div>
+  );
+}
+
+function Stat({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div>
+      <dt className="text-xs text-[var(--muted)]">{label}</dt>
+      <dd className={`font-mono text-xs ${className ?? ""}`}>{value}</dd>
     </div>
   );
 }
@@ -257,78 +290,58 @@ function BookTable({
   onSelect,
 }: {
   title: string;
-  rows: ScanRow[];
+  rows: LifecycleRow[];
   selected: string | null;
-  onSelect: (ticker: string) => void;
+  onSelect: (company: string) => void;
 }) {
   return (
     <section>
-      <h2 className="mb-1.5 text-sm text-[var(--ink)]">
+      <h2 className="mb-2 text-sm text-[var(--ink)]">
         {title} <span className="text-[var(--muted)]">({rows.length})</span>
       </h2>
       {rows.length === 0 ? (
-        <p className="border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--muted)]">
-          None in this snapshot.
-        </p>
+        <p className="text-sm text-[var(--muted)]">None in this snapshot.</p>
       ) : (
         <div className="overflow-x-auto border border-[var(--line)] bg-white">
-          <table className="w-full min-w-[1020px] text-left text-sm">
-            <thead className="bg-[var(--wash)] text-[11px] tracking-wide text-[var(--muted)]">
+          <table className="w-full min-w-[980px] text-left text-sm">
+            <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
               <tr>
-                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Action</th>
-                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Ticker</th>
-                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Name</th>
-                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Type</th>
-                <HintTh tipKey="ltp" className="text-right">
-                  LTP
-                </HintTh>
-                <HintTh tipKey="payReceive" className="text-right">
-                  Pay / Receive now
-                </HintTh>
-                <HintTh tipKey="conviction" className="text-right">
-                  Conviction
-                </HintTh>
-                <HintTh tipKey="change" className="text-right">
-                  Change
-                </HintTh>
-                <th className="whitespace-nowrap px-3 py-1.5 font-medium">Instruction</th>
+                <th className="px-3 py-2 font-medium">Suggestion</th>
+                <th className="px-3 py-2 font-medium">Symbol</th>
+                <th className="px-3 py-2 font-medium text-right">Close</th>
+                <th className="px-3 py-2 font-medium text-right">Health</th>
+                <th className="px-3 py-2 font-medium">State</th>
+                <th className="px-3 py-2 font-medium">Pressure</th>
+                <th className="px-3 py-2 font-medium">Structure</th>
+                <th className="px-3 py-2 font-medium">Candidate</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {rows.map((row) => (
                 <tr
-                  key={r.ticker}
-                  className={`cursor-pointer border-t border-[var(--line)] ${
-                    selected === r.ticker ? actionWash(r.action) : "hover:bg-[var(--wash)]"
-                  }`}
-                  onClick={() => onSelect(r.ticker)}
+                  key={row.company}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${row.company}, ${row.suggestion ?? "no suggestion"}`}
+                  className={`cursor-pointer border-t border-[var(--line)] ${selected === row.company ? "bg-[var(--wash)]" : "hover:bg-[var(--wash)]"}`}
+                  onClick={() => onSelect(row.company)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect(row.company);
+                    }
+                  }}
                 >
-                  <td className="px-3 py-1.5">
-                    <ActionBadge action={r.action} />
+                  <td className={`max-w-[240px] px-3 py-2 ${suggestionClass(row.suggestion)}`}>{row.suggestion}</td>
+                  <td className="px-3 py-2 font-mono">{row.company}</td>
+                  <td className="px-3 py-2 text-right font-mono">{inr(row.close)}</td>
+                  <td className={`px-3 py-2 text-right font-mono ${healthClass(row.healthState)}`}>
+                    {num(row.healthScore)}
                   </td>
-                  <td className="px-3 py-1.5 font-mono">{r.ticker}</td>
-                  <td className="px-3 py-1.5">{r.name}</td>
-                  <td className="px-3 py-1.5 text-[var(--muted)]">{r.kind === "etf" ? "ETF" : "Equity"}</td>
-                  <td className="px-3 py-1.5 text-right font-mono">
-                    {inr(r.last)}
-                    {r.asOf ? (
-                      <span className="mt-0.5 block text-[11px] font-sans text-[var(--muted)]">
-                        {pricesAsOf(r.asOf)}
-                      </span>
-                    ) : null}
-                  </td>
-                  <FillNowCell
-                    action={r.action}
-                    buyLabel={r.last == null ? null : inr(r.buyAt)}
-                    sellLabel={r.last == null ? null : inr(r.sellAt)}
-                  />
-                  <td className={`px-3 py-1.5 text-right font-mono ${convictionClass(r.conviction)}`}>
-                    {convictionPct(r.conviction)}
-                  </td>
-                  <td className={`px-3 py-1.5 text-right font-mono ${changeClass(r.changePct)}`}>
-                    {pct(r.changePct)}
-                  </td>
-                  <td className="max-w-[280px] px-3 py-1.5 text-[var(--muted)]">{r.why}</td>
+                  <td className="px-3 py-2">{row.healthState ?? "—"}</td>
+                  <td className="px-3 py-2">{row.pressure ?? "—"}</td>
+                  <td className="px-3 py-2">{row.structureState ?? "—"}</td>
+                  <td className="px-3 py-2">{row.candidateStatus ?? "—"}</td>
                 </tr>
               ))}
             </tbody>
@@ -336,51 +349,5 @@ function BookTable({
         </div>
       )}
     </section>
-  );
-}
-
-function NseQuoteBoard({ row }: { row: ScanRow }) {
-  return (
-    <div className="mt-4 overflow-x-auto border border-[var(--line)] bg-[var(--wash)]">
-      <table className="w-full min-w-[22rem] text-left text-xs">
-        <caption className="sr-only">NSE last, change, close, high, low, and last trade time</caption>
-        <thead className="text-[11px] tracking-wide text-[var(--muted)]">
-          <tr>
-            <th className="whitespace-nowrap px-3 py-1.5 font-medium">Quote</th>
-            <th className="whitespace-nowrap px-3 py-1.5 text-right font-medium">NSE</th>
-          </tr>
-        </thead>
-        <tbody className="bg-white text-[var(--ink)]">
-          <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Last</th>
-            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(row.changePct)}`}>{inr(row.last)}</td>
-          </tr>
-          <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Change</th>
-            <td className={`px-3 py-1.5 text-right font-mono ${changeClass(row.changePct)}`}>
-              {signedInr(row.changeInr)} {pct(row.changePct)}
-            </td>
-          </tr>
-          <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">
-              <HintLabel tipKey="nseClose">Close</HintLabel>
-            </th>
-            <td className="px-3 py-1.5 text-right font-mono">{inr(row.prevClose)}</td>
-          </tr>
-          <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">High</th>
-            <td className="px-3 py-1.5 text-right font-mono">{inr(row.dayHigh)}</td>
-          </tr>
-          <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Low</th>
-            <td className="px-3 py-1.5 text-right font-mono">{inr(row.dayLow)}</td>
-          </tr>
-          <tr className="border-t border-[var(--line)]">
-            <th className="px-3 py-1.5 font-medium text-[var(--muted)]">Last trade</th>
-            <td className="px-3 py-1.5 text-right font-mono">{row.asOf ?? "—"}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
   );
 }

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { LEGAL_MARKET_NOTE, REFERENCE_FOOTER } from "@/lib/copy";
 
 const NAV = [
-  { href: "/", label: "Nifty 500" },
+  { href: "/", label: "Lifecycle" },
   { href: "/gold", label: "Gold" },
   { href: "/silver", label: "Silver" },
   { href: "/copper", label: "Copper" },
