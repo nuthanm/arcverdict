@@ -48,7 +48,14 @@ export function EquitiesDesk() {
     async function load() {
       try {
         const res = await fetch("/api/lifecycle", { cache: "no-store" });
-        const body = (await res.json()) as BookResponse;
+        const text = await res.text();
+        if (!text) throw new Error("Lifecycle book returned an empty response");
+        let body: BookResponse;
+        try {
+          body = JSON.parse(text) as BookResponse;
+        } catch {
+          throw new Error("Lifecycle book returned an unreadable response");
+        }
         if (!res.ok || !body.ok) throw new Error(body.error ?? "Lifecycle book failed");
         if (!cancelled) {
           setData(body);

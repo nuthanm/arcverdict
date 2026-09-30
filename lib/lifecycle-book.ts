@@ -63,6 +63,14 @@ async function rebuild() {
   const meta = cachedMeta();
   if (meta.asOf && meta.asOf >= expected) return;
   if (meta.attemptedFor === expected && meta.asOf) return;
+  try {
+    await rebuildFromMarket(expected);
+  } catch (err) {
+    console.error("lifecycle refresh failed", err);
+  }
+}
+
+async function rebuildFromMarket(expected: string) {
 
   const universe = symbols();
   const histories = await fetchNseDailyHistory(universe);

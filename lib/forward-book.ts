@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { DailyBar, HourBar } from "./daily-history";
 import { fetchNseCandles, fetchNseHourly } from "./daily-history";
@@ -95,15 +96,16 @@ type Ledger = {
 };
 
 const ledgerPath = path.join(process.cwd(), "data", "lead-ledger.json");
+const runtimeLedgerPath = path.join(tmpdir(), "arcverdict-lead-ledger.json");
 
 function emptyLedger(): Ledger {
   return { freshFrom: FRESH_FROM, open: [], historical: [], voided: [] };
 }
 
-function loadLedger(): Ledger {
+function parseLedger(file: string): Ledger | null {
   try {
-    const parsed = JSON.parse(readFileSync(ledgerPath, "utf8")) as Ledger;
-    if (parsed.freshFrom !== FRESH_FROM || !Array.isArray(parsed.historical)) return emptyLedger();
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Ledger;
+    if (parsed.freshFrom !== FRESH_FROM || !Array.isArray(parsed.historical)) return null;
     return {
       freshFrom: FRESH_FROM,
       open: Array.isArray(parsed.open) ? parsed.open.filter((row) => row.signalDate >= FRESH_FROM) : [],
@@ -111,12 +113,25 @@ function loadLedger(): Ledger {
       voided: Array.isArray(parsed.voided) ? parsed.voided.filter((row) => row.signalDate >= FRESH_FROM) : [],
     };
   } catch {
-    return emptyLedger();
+    return null;
   }
 }
 
+function loadLedger(): Ledger {
+  return parseLedger(runtimeLedgerPath) ?? parseLedger(ledgerPath) ?? emptyLedger();
+}
+
 function saveLedger(ledger: Ledger) {
-  writeFileSync(ledgerPath, JSON.stringify(ledger));
+  const payload = JSON.stringify(ledger);
+  try {
+    writeFileSync(ledgerPath, payload);
+  } catch {
+    try {
+      writeFileSync(runtimeLedgerPath, payload);
+    } catch {
+      // A read-only host still returns the book. The next request recomputes it from the hourly bars.
+    }
+  }
 }
 
 export function chartSource(symbol: string) {
