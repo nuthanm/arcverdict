@@ -112,7 +112,7 @@ export function EquitiesDesk() {
       {data?.ok && (
         <>
           <section>
-            <h2 className="text-sm text-[var(--ink)]">
+            <h2 className="text-sm font-bold text-[var(--ink)]">
               Active Leads <span className="text-[var(--muted)]">({leads.length})</span>
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
@@ -127,20 +127,20 @@ export function EquitiesDesk() {
             ) : (
               <div className="mt-3 overflow-x-auto border border-[var(--line)] bg-white">
                 <table className="w-full min-w-[1280px] text-left text-sm">
-                  <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
+                  <thead className="bg-[var(--wash)] text-xs font-bold text-[var(--ink)]">
                     <tr>
-                      <th className="px-3 py-2 font-medium">Candles</th>
-                      <th className="px-3 py-2 font-medium">Symbol</th>
-                      <th className="px-3 py-2 font-medium">Signal close</th>
-                      <th className="px-3 py-2 font-medium">Lead for</th>
-                      <th className="px-3 py-2 font-medium text-right">Entry</th>
-                      <th className="px-3 py-2 font-medium text-right">Previous close</th>
-                      <th className="px-3 py-2 font-medium text-right">Current</th>
-                      <th className="px-3 py-2 font-medium text-right">Support</th>
-                      <th className="px-3 py-2 font-medium">Trend</th>
-                      <th className="px-3 py-2 font-medium">Health</th>
-                      <th className="px-3 py-2 font-medium">Pressure</th>
-                      <th className="px-3 py-2 font-medium">Structure</th>
+                      <th className="px-3 py-2 font-bold">Candles</th>
+                      <th className="px-3 py-2 font-bold">Symbol</th>
+                      <th className="px-3 py-2 font-bold">Signal close</th>
+                      <th className="px-3 py-2 font-bold">Lead for</th>
+                      <th className="px-3 py-2 font-bold text-right">Entry</th>
+                      <th className="px-3 py-2 font-bold text-right">Previous close</th>
+                      <th className="px-3 py-2 font-bold text-right">Current</th>
+                      <th className="px-3 py-2 font-bold text-right">Support</th>
+                      <th className="px-3 py-2 font-bold">Trend</th>
+                      <th className="px-3 py-2 font-bold">Health</th>
+                      <th className="px-3 py-2 font-bold">Pressure</th>
+                      <th className="px-3 py-2 font-bold">Structure</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -197,7 +197,7 @@ export function EquitiesDesk() {
           </section>
 
           <section>
-            <h2 className="text-sm text-[var(--ink)]">
+            <h2 className="text-sm font-bold text-[var(--ink)]">
               Trend reversal downward Monitoring for Active Leads{" "}
               <span className="text-[var(--muted)]">({monitoring.length})</span>
             </h2>
@@ -215,17 +215,17 @@ export function EquitiesDesk() {
             ) : (
               <div className="mt-3 overflow-x-auto border border-[var(--line)] bg-white">
                 <table className="w-full min-w-[860px] text-left text-sm">
-                  <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
+                  <thead className="bg-[var(--wash)] text-xs font-bold text-[var(--ink)]">
                     <tr>
-                      <th className="px-3 py-2 font-medium">Status</th>
-                      <th className="px-3 py-2 font-medium">Symbol</th>
-                      <th className="px-3 py-2 font-medium">Signal</th>
-                      <th className="px-3 py-2 font-medium">Session</th>
-                      <th className="px-3 py-2 font-medium text-right">Entry</th>
-                      <th className="px-3 py-2 font-medium text-right">Last</th>
-                      <th className="px-3 py-2 font-medium text-right">Resistance</th>
-                      <th className="px-3 py-2 font-medium">Trend</th>
-                      <th className="px-3 py-2 font-medium text-right">Sell</th>
+                      <th className="px-3 py-2 font-bold">Status</th>
+                      <th className="px-3 py-2 font-bold">Symbol</th>
+                      <th className="px-3 py-2 font-bold">Signal</th>
+                      <th className="px-3 py-2 font-bold">Session</th>
+                      <th className="px-3 py-2 font-bold text-right">Entry</th>
+                      <th className="px-3 py-2 font-bold text-right">Last</th>
+                      <th className="px-3 py-2 font-bold text-right">Resistance</th>
+                      <th className="px-3 py-2 font-bold">Trend</th>
+                      <th className="px-3 py-2 font-bold text-right">Sell</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -255,7 +255,7 @@ export function EquitiesDesk() {
           </section>
 
           <section>
-            <h2 className="text-sm text-[var(--ink)]">
+            <h2 className="text-sm font-bold text-[var(--ink)]">
               Historical Leads provided <span className="text-[var(--muted)]">({historical.length})</span>
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
@@ -264,12 +264,12 @@ export function EquitiesDesk() {
             </p>
             <div className="mt-3 overflow-x-auto border border-[var(--line)] bg-white">
               <table className="w-full min-w-[520px] text-left text-sm">
-                <thead className="bg-[var(--wash)] text-xs text-[var(--muted)]">
+                <thead className="bg-[var(--wash)] text-xs font-bold text-[var(--ink)]">
                   <tr>
-                    <th className="px-3 py-2 font-medium">Symbol</th>
-                    <th className="px-3 py-2 font-medium">Signal</th>
-                    <th className="px-3 py-2 font-medium text-right">Entry</th>
-                    <th className="px-3 py-2 font-medium text-right">Sell</th>
+                    <th className="px-3 py-2 font-bold">Symbol</th>
+                    <th className="px-3 py-2 font-bold">Signal</th>
+                    <th className="px-3 py-2 font-bold text-right">Entry</th>
+                    <th className="px-3 py-2 font-bold text-right">Sell</th>
                   </tr>
                 </thead>
                 <tbody>
