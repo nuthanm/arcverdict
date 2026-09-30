@@ -84,9 +84,25 @@ export function EquitiesDesk() {
     <div className="space-y-8">
       <div className="flex flex-wrap items-center gap-3">
         <span className="font-mono text-xs text-[var(--muted)]">
-          Book starts {data?.freshFrom ?? "2026-09-29"}
-          {data?.asOf ? ` · last close ${data.asOf}` : ""}
-          {data?.marketOpen ? " · NSE session open, monitoring is live" : " · NSE session closed"}
+          Book starts <strong className="font-semibold text-[var(--ink)]">{data?.freshFrom ?? "2026-09-29"}</strong>
+          {data?.asOf ? (
+            <>
+              {" "}
+              · last close <strong className="font-semibold text-[var(--ink)]">{data.asOf}</strong>
+            </>
+          ) : null}
+          {data?.marketOpen ? (
+            <>
+              {" "}
+              · NSE session <strong className="font-semibold text-[var(--buy)]">open</strong>, monitoring is{" "}
+              <strong className="font-semibold text-[var(--buy)]">live</strong>
+            </>
+          ) : (
+            <>
+              {" "}
+              · NSE session <strong className="font-semibold text-[var(--ink)]">closed</strong>
+            </>
+          )}
         </span>
         {loading && <span className="text-xs text-[var(--muted)]">Loading book…</span>}
       </div>
@@ -147,7 +163,26 @@ export function EquitiesDesk() {
                           {row.entryPrice == null ? "—" : inr(row.entryPrice)}
                         </td>
                         <td className="px-3 py-2 text-right font-mono">{inr(row.close)}</td>
-                        <td className="px-3 py-2 text-right font-mono">{inr(row.currentPrice)}</td>
+                        <td className="px-3 py-2 text-right font-mono">
+                          {data.marketOpen && row.currentPrice != null ? (
+                            <strong
+                              className={`font-semibold ${
+                                row.close != null && row.currentPrice < row.close
+                                  ? "text-[var(--sell)]"
+                                  : "text-[var(--buy)]"
+                              }`}
+                            >
+                              {row.currentPrice.toLocaleString("en-IN", {
+                                style: "currency",
+                                currency: "INR",
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
+                            </strong>
+                          ) : (
+                            inr(row.currentPrice)
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono">{inr(row.supportPrice)}</td>
                         <td className="px-3 py-2 text-[var(--buy)]">{row.trend ?? "—"}</td>
                         <td className="px-3 py-2">{row.healthState ?? "—"}</td>
