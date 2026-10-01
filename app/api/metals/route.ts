@@ -1,6 +1,7 @@
 import { engineParams } from "@/lib/api";
 import { COMEX_LAST_MISSING, NSE_NOT_IN_SNAPSHOT } from "@/lib/copy";
 import { classify } from "@/lib/engine";
+import { METALS_DESKS_ENABLED } from "@/lib/flags";
 import { formatLastTradeStamp } from "@/lib/format";
 import { executablePrices } from "@/lib/prices";
 import { comexSession, formatIst } from "@/lib/session";
@@ -13,6 +14,10 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET(request: Request) {
+  if (!METALS_DESKS_ENABLED) {
+    return Response.json({ ok: true, paused: true, marketClosed: true, metals: [] });
+  }
+
   const session = comexSession();
 
   try {

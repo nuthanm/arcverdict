@@ -3,12 +3,17 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LEGAL_MARKET_NOTE, REFERENCE_FOOTER } from "@/lib/copy";
+import { METALS_DESKS_ENABLED } from "@/lib/flags";
 
 const NAV = [
   { href: "/", label: "Lifecycle" },
-  { href: "/gold", label: "Gold" },
-  { href: "/silver", label: "Silver" },
-  { href: "/copper", label: "Copper" },
+  ...(METALS_DESKS_ENABLED
+    ? [
+        { href: "/gold", label: "Gold" },
+        { href: "/silver", label: "Silver" },
+        { href: "/copper", label: "Copper" },
+      ]
+    : []),
   { href: "/settings", label: "Settings" },
 ];
 
