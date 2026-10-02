@@ -58,7 +58,7 @@ function HourChart({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label={`${symbol} 1-hour candles with price, date, and time`}
+      aria-label={`${symbol} 30-minute candles with price, date, and time`}
       className="bg-[var(--wash)]"
     >
       {priceLevels.map((price) => (
@@ -162,22 +162,22 @@ export function CandleSnapshot({
   if (candles.length < 2) {
     return (
       <figure className="w-[300px] max-w-[300px]">
-        <p className="text-xs text-[var(--muted)]">1-hour snapshot unavailable.</p>
+        <p className="text-xs text-[var(--muted)]">30-minute snapshot unavailable.</p>
         <figcaption className="mt-1 text-[10px] leading-snug text-[var(--muted)]">Source: {source}.</figcaption>
       </figure>
     );
   }
 
   const note = shaded
-    ? "Shade is the hour that met the 50-hour EMA and the next two hours, which stayed above it and finished higher."
-    : "No 50-hour EMA support was confirmed by the next two hours.";
+    ? "Shade runs from the pullback that tagged the rising 50-bar EMA through the bar momentum resumed."
+    : "The buy bars are outside this window.";
 
   return (
     <figure className="w-[300px] max-w-[300px]">
       <button
         type="button"
         className="block w-full cursor-zoom-in border-0 bg-transparent p-0"
-        aria-label={`Open larger ${symbol} 1-hour chart`}
+        aria-label={`Open larger ${symbol} 30-minute chart`}
         onClick={() => setOpen(true)}
       >
         <HourChart symbol={symbol} candles={candles} width={300} height={132} />
@@ -196,12 +196,12 @@ export function CandleSnapshot({
           <div
             role="dialog"
             aria-modal="true"
-            aria-label={`${symbol} 1-hour chart`}
+            aria-label={`${symbol} 30-minute chart`}
             className="w-full max-w-5xl border border-[var(--line)] bg-white p-4"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between gap-3">
-              <p className="text-sm text-[var(--ink)]">{symbol} · 1-hour candles</p>
+              <p className="text-sm text-[var(--ink)]">{symbol} · 30-minute candles</p>
               <button type="button" className="px-2 py-1 text-sm text-[var(--muted)]" onClick={() => setOpen(false)}>
                 Close
               </button>

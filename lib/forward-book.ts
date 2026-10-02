@@ -1,18 +1,23 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { DailyBar, HourBar } from "./daily-history";
-import { fetchNseCandles, fetchNseHourly } from "./daily-history";
+import type { HourBar } from "./daily-history";
+import { fetchNseHourly } from "./daily-history";
 import {
   FRESH_FROM,
-  freshReversalLeads,
-  leadSessionClosed,
-  sellAfterSignal,
+  lastClosedNseSession,
+  leadSessionOpen,
+  nseClock,
+  sessionScanDate,
   type DeskStatus,
   type FreshLead,
 } from "./desk-book";
 import type { DailyLifecycleRow } from "./lifecycle";
+import { findDowntrendSell, findUptrendBuy, isUptrend } from "./session-reversal";
+import { NIFTY_UNIVERSE } from "./universe";
 import { nseSymbol, quoteBySymbol, fetchYahooQuotes, type YahooQuote } from "./yahoo";
+
+export const HISTORY_AFTER_SELL_MS = 15 * 60 * 1000;
 
 export type CandlePoint = {
   date: string;
@@ -45,6 +50,7 @@ export type MonitorLead = {
   sellValue: number | null;
   lastPrice: number | null;
   trend: string | null;
+  sellMarkedAt: string | null;
 };
 
 export type HistoricalLead = {
@@ -78,8 +84,11 @@ type OpenLead = {
   pressure: string | null;
   structureState: string | null;
   signalLow: number | null;
+  confirmLabel?: string | null;
+  rule?: string | null;
   sellValue: number | null;
   sellOn: string | null;
+  sellMarkedAt?: string | null;
   reason: string | null;
 };
 
@@ -135,7 +144,7 @@ function saveLedger(ledger: Ledger) {
 }
 
 export function chartSource(symbol: string) {
-  return `Yahoo Finance 1-hour candles for ${symbol}.NS, the NSE cash series. Lead uses the 50-hour EMA`;
+  return `Yahoo Finance 30-minute candles for ${symbol}.NS. Entry is the pullback high in a rising 50-bar EMA uptrend`
 }
 
 export function chartUrl(symbol: string) {
@@ -165,9 +174,9 @@ function ema50(closes: number[]) {
 }
 
 /**
- * Support is the low of the hour that met the 50-hour EMA. It counts only when the
- * next two hours both close above that average and the second of them finishes above
- * the support hour. A single green hour is not used.
+ * Support is the low of the bar that met the 50-bar EMA. It counts only when the
+ * next two bars both close above that average and the second of them finishes above
+ * the support bar. A single green bar is not used.
  */
 function emaSupport(bars: HourBar[], ema: Array<number | null>) {
   let chosen: { index: number; support: number } | null = null;
@@ -190,8 +199,8 @@ function emaSupport(bars: HourBar[], ema: Array<number | null>) {
 
 /**
  * Resistance is the mirror of support, and only after that support. It is the high of
- * the hour that met the 50-hour EMA on the way down. It counts when the next two hours
- * both close below that average and the second finishes below the rejection hour.
+ * the bar that met the 50-bar EMA on the way down. It counts when the next two bars
+ * both close below that average and the second finishes below the rejection bar.
  */
 function emaResistance(bars: HourBar[], ema: Array<number | null>, afterIndex: number, supportPrice: number) {
   let chosen: { index: number; resistance: number } | null = null;
@@ -216,7 +225,7 @@ function emaResistance(bars: HourBar[], ema: Array<number | null>, afterIndex: n
   return chosen;
 }
 
-function hourlyReversalChart(bars: HourBar[]) {
+function hourlyReversalChart(bars: HourBar[], mark?: { from: number; to: number } | null) {
   const ema = ema50(bars.map((bar) => bar.close));
   const support = emaSupport(bars, ema);
   const resistance = support ? emaResistance(bars, ema, support.index, support.support) : null;
@@ -230,7 +239,7 @@ function hourlyReversalChart(bars: HourBar[]) {
       low: round2(bar.low),
       close: round2(bar.close),
       ema50: ema[index] == null ? null : round2(ema[index]),
-      highlight: support != null && index >= support.index && index <= support.index + 2,
+      highlight: mark != null && index >= mark.from && index <= mark.to,
     };
   });
   return {
@@ -240,95 +249,16 @@ function hourlyReversalChart(bars: HourBar[]) {
   };
 }
 
-function signalLow(bars: DailyBar[], signalDate: string) {
-  const exact = bars.find((bar) => bar.date === signalDate);
-  const prior = exact ?? [...bars].reverse().find((bar) => bar.date <= signalDate);
-  return prior ? round2(prior.low) : null;
-}
-
 function quotePrice(quote: YahooQuote | null) {
   const price = quote?.regularMarketPrice;
   return price != null && price > 0 ? price : null;
 }
 
-function quoteOnSession(quote: YahooQuote | null, leadFor: string) {
-  const time = quote?.regularMarketTime;
-  if (time == null || !(time > 0)) return false;
-  const date = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(time * 1000));
-  return date === leadFor;
-}
-
-function labelMinutes(label: string) {
-  const [hour, minute] = label.split(":").map(Number);
-  return hour * 60 + minute;
-}
-
-/** A strong hour closes near its high with a real body, not a doji or a long upper wick. */
-function isStrongBullHour(bar: HourBar) {
-  const range = bar.high - bar.low;
-  if (!(range > 0) || !(bar.close > bar.open) || !(bar.open > 0)) return false;
-  const body = bar.close - bar.open;
-  const upperWick = bar.high - bar.close;
-  return body / range >= 0.6 && upperWick / range <= 0.2 && body / bar.open >= 0.005;
-}
-
-type EntryCheck = { state: "confirmed"; price: number } | { state: "broken" } | { state: "waiting" };
-
-/**
- * Entry is the first higher high between two consecutive strong hours on the lead session.
- * The fill is the first hour's high, the price the second hour had to trade to make that high.
- * A dip under support before that pair invalidates the lead. Holding support alone is not an entry.
- */
-function higherHighEntry(hours: HourBar[], leadFor: string, support: number | null): EntryCheck {
-  if (support == null) return { state: "waiting" };
-  const session = hours
-    .filter((bar) => bar.date === leadFor && bar.label !== "15:30")
-    .sort((a, b) => a.label.localeCompare(b.label));
-  for (let i = 0; i < session.length; i++) {
-    const bar = session[i];
-    if (bar.low < support) return { state: "broken" };
-    if (i === 0) continue;
-    const first = session[i - 1];
-    const gap = labelMinutes(bar.label) - labelMinutes(first.label);
-    if (!(gap > 0 && gap <= 75)) continue;
-    if (!isStrongBullHour(first) || !isStrongBullHour(bar)) continue;
-    if (!(bar.high > first.high) || !(bar.close > first.close)) continue;
-    const price = bar.low > first.high ? bar.open : first.high;
-    return { state: "confirmed", price: round2(price) };
-  }
-  return { state: "waiting" };
-}
-
-function liveBrokeSupport(quote: YahooQuote | null, bars: DailyBar[], leadFor: string, support: number | null) {
-  if (support == null) return false;
-  const today = bars.find((bar) => bar.date === leadFor);
-  if (today && today.low > 0 && today.low < support) return true;
-  if (!quoteOnSession(quote, leadFor)) return false;
-  const price = quotePrice(quote);
-  const dayLow = quote?.regularMarketDayLow;
-  return (price != null && price < support) || (dayLow != null && dayLow > 0 && dayLow < support);
-}
-
-function liveSell(quote: YahooQuote | null, low: number | null) {
-  if (low == null) return null;
-  const price = quotePrice(quote);
-  const dayLow = quote?.regularMarketDayLow;
-  const pierced = (price != null && price <= low) || (dayLow != null && dayLow > 0 && dayLow <= low);
-  if (!pierced) return null;
-  const print = price != null && price <= low ? price : dayLow != null && dayLow <= low ? dayLow : price;
-  return print == null ? null : round2(print);
-}
-
-function resistanceState(resistancePrice: number | null): { status: DeskStatus; statusNote: string } {
-  if (resistancePrice == null) {
-    return { status: "HOLD", statusNote: "Hold — rally has not rejected the 50-hour EMA" };
-  }
-  return { status: "SELL", statusNote: "Sell — resistance rejected, down reversal confirmed" };
+function markSell(position: OpenLead, price: number, soldOn: string, reason: string, now: Date) {
+  position.sellValue = price;
+  position.sellOn = soldOn;
+  position.reason = reason;
+  if (!position.sellMarkedAt) position.sellMarkedAt = now.toISOString();
 }
 
 function istDate(now: Date) {
@@ -344,17 +274,8 @@ function alreadySold(ledger: Ledger, company: string, signalDate: string) {
   return ledger.historical.some((row) => row.company === company && row.signalDate === signalDate);
 }
 
-function alreadyVoided(ledger: Ledger, company: string, signalDate: string) {
-  return ledger.voided.some((row) => row.company === company && row.signalDate === signalDate);
-}
-
-function voidLead(ledger: Ledger, company: string, signalDate: string) {
-  if (!alreadyVoided(ledger, company, signalDate)) ledger.voided.push({ company, signalDate });
-  ledger.open = ledger.open.filter((row) => !(row.company === company && row.signalDate === signalDate));
-}
-
-function findOpen(ledger: Ledger, company: string, signalDate: string) {
-  return ledger.open.find((row) => row.company === company && row.signalDate === signalDate) ?? null;
+function hasOpenLead(ledger: Ledger, company: string) {
+  return ledger.open.some((row) => row.company === company);
 }
 
 function normalizeHistorical(row: HistoricalLead): HistoricalLead {
@@ -407,110 +328,170 @@ function archive(
   ledger.open = ledger.open.filter((row) => !(row.company === position.company && row.signalDate === position.signalDate));
 }
 
+function scanSymbols(history: Record<string, DailyLifecycleRow[]>) {
+  const etf = new Set(NIFTY_UNIVERSE.filter((row) => row.kind === "etf").map((row) => row.ticker));
+  const symbols = new Set<string>();
+  for (const ticker of Object.keys(history)) {
+    if (!etf.has(ticker)) symbols.add(ticker);
+  }
+  for (const row of NIFTY_UNIVERSE) {
+    if (row.kind !== "etf") symbols.add(row.ticker);
+  }
+  return [...symbols];
+}
+
+function contextBefore(rows: DailyLifecycleRow[] | undefined, sessionDate: string) {
+  return latestDaily(rows, sessionDate, false);
+}
+
+function latestDaily(rows: DailyLifecycleRow[] | undefined, through: string, inclusive: boolean) {
+  let chosen: DailyLifecycleRow | null = null;
+  for (const row of rows ?? []) {
+    if (!row.date) continue;
+    if (inclusive ? row.date > through : row.date >= through) continue;
+    if (!chosen?.date || row.date > chosen.date) chosen = row;
+  }
+  return chosen;
+}
+
+/** Weekdays from the fresh start through the last session that is allowed to seed a lead. */
+function bookedSessions(through: string) {
+  const dates: string[] = [];
+  const [year, month, day] = FRESH_FROM.split("-").map(Number);
+  const cursor = new Date(Date.UTC(year, month - 1, day));
+  while (true) {
+    const iso = cursor.toISOString().slice(0, 10);
+    if (iso > through) break;
+    const weekday = cursor.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) dates.push(iso);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
+function leadFromPosition(position: OpenLead, now: Date): FreshLead {
+  return {
+    company: position.company,
+    signalDate: position.signalDate,
+    leadFor: position.leadFor,
+    close: position.previousClose,
+    trend: position.trend,
+    healthState: position.healthState,
+    pressure: position.pressure,
+    structureState: position.structureState,
+    sessionOpen: leadSessionOpen(position.leadFor, now),
+  };
+}
+
+function lastSessionClose(hours: HourBar[], leadFor: string) {
+  let close: number | null = null;
+  for (const bar of hours) {
+    if (bar.date === leadFor && bar.label !== "15:30") close = bar.close;
+  }
+  return close == null ? null : round2(close);
+}
+
 export async function assembleForwardBook(
   history: Record<string, DailyLifecycleRow[]>,
   asOf: string | null,
   now = new Date(),
 ) {
-  const discovered = freshReversalLeads(history, now);
+  const clock = nseClock(now);
+  const liveSession = sessionScanDate(now);
+  // Before the next open, keep scanning the session that just closed. A confirmed
+  // uptrend buy stays on the book through that close.
+  const scanThrough = liveSession ?? lastClosedNseSession(now);
   const ledger = loadLedger();
-  const waiting: FreshLead[] = [];
-  const due: FreshLead[] = [];
+  const universe = [...new Set([...scanSymbols(history), ...ledger.open.map((row) => row.company)])];
+  const hourlyRows = universe.length ? await fetchNseHourly(universe) : [];
+  const hourlyBySymbol = new Map(hourlyRows.map((row) => [row.ticker, row.bars]));
+  let ledgerChanged = false;
 
-  for (const lead of discovered.leads) {
-    if (alreadySold(ledger, lead.company, lead.signalDate)) continue;
-    if (alreadyVoided(ledger, lead.company, lead.signalDate)) continue;
-    if (lead.sessionOpen || findOpen(ledger, lead.company, lead.signalDate)) due.push(lead);
-    else waiting.push(lead);
+  for (const position of [...ledger.open]) {
+    if (position.rule === "uptrend") continue;
+    ledger.open = ledger.open.filter((row) => row !== position);
+    ledgerChanged = true;
   }
 
-  const chartTickers = [...new Set([...waiting, ...due].map((lead) => lead.company))];
-  const [candleRows, hourlyRows] = chartTickers.length
-    ? await Promise.all([fetchNseCandles(chartTickers), fetchNseHourly(chartTickers)])
-    : [[], []];
-  const candlesBySymbol = new Map(candleRows.map((row) => [row.ticker, row.bars]));
-  const hourlyBySymbol = new Map(hourlyRows.map((row) => [row.ticker, row.bars]));
+  const sessions = bookedSessions(scanThrough);
+  for (const company of universe) {
+    if (hasOpenLead(ledger, company)) continue;
+    const hours = hourlyBySymbol.get(company) ?? [];
+    for (const sessionDate of sessions) {
+      if (alreadySold(ledger, company, sessionDate)) continue;
+      const context = contextBefore(history[company], sessionDate);
+      if (!isUptrend(context?.trend ?? null)) continue;
+      const hit = findUptrendBuy(hours, sessionDate, now);
+      if (hit.state !== "confirmed") continue;
+      ledger.open.push({
+        company,
+        signalDate: sessionDate,
+        leadFor: sessionDate,
+        entryPrice: hit.entryPrice,
+        previousClose: context?.close ?? null,
+        supportPrice: hit.supportPrice,
+        trend: context?.trend ?? null,
+        healthState: context?.healthState ?? null,
+        pressure: context?.pressure ?? null,
+        structureState: context?.structureState ?? null,
+        signalLow: hit.supportPrice,
+        confirmLabel: hit.confirmLabel,
+        rule: "uptrend",
+        sellValue: null,
+        sellOn: null,
+        sellMarkedAt: null,
+        reason: null,
+      });
+      ledgerChanged = true;
+      break;
+    }
+  }
 
   let quotes: YahooQuote[] = [];
-  const quoteTickers = discovered.marketOpen ? chartTickers : due.map((lead) => lead.company);
-  if (quoteTickers.length) {
+  const quoteNames = [...new Set(ledger.open.map((row) => row.company))];
+  if (quoteNames.length) {
     try {
-      quotes = await fetchYahooQuotes(quoteTickers.map((ticker) => nseSymbol(ticker)));
+      quotes = await fetchYahooQuotes(quoteNames.map((ticker) => nseSymbol(ticker)));
     } catch {
       quotes = [];
     }
   }
 
   const monitoring: MonitorLead[] = [];
-  const stillWaiting: FreshLead[] = [...waiting];
-  let ledgerChanged = false;
   const today = istDate(now);
 
-  for (const lead of due) {
-    const bars = candlesBySymbol.get(lead.company) ?? [];
-    const low = signalLow(bars, lead.signalDate);
-    const quote = quoteBySymbol(quotes, nseSymbol(lead.company));
-    let position = findOpen(ledger, lead.company, lead.signalDate);
-
-    if (!position) {
-      const hours = hourlyBySymbol.get(lead.company) ?? [];
-      const supportPrice = hourlyReversalChart(hours).supportPrice;
-      const check = higherHighEntry(hours, lead.leadFor, supportPrice);
-      if (check.state !== "confirmed") {
-        const failed = check.state === "broken" || liveBrokeSupport(quote, bars, lead.leadFor, supportPrice);
-        if (failed || leadSessionClosed(lead.leadFor, now)) {
-          voidLead(ledger, lead.company, lead.signalDate);
-          ledgerChanged = true;
-          continue;
-        }
-        stillWaiting.push(lead);
-        continue;
+  for (const position of [...ledger.open]) {
+    const hours = hourlyBySymbol.get(position.company) ?? [];
+    const quote = quoteBySymbol(quotes, nseSymbol(position.company));
+    const latest = latestDaily(history[position.company], clock.closedThrough, true);
+    if (latest && position.trend !== latest.trend) {
+      position.trend = latest.trend ?? position.trend;
+      position.healthState = latest.healthState ?? position.healthState;
+      position.pressure = latest.pressure ?? position.pressure;
+      position.structureState = latest.structureState ?? position.structureState;
+      ledgerChanged = true;
+    }
+    if (position.confirmLabel && position.sellValue == null) {
+      const broke = findDowntrendSell(hours, position.leadFor, position.confirmLabel, now);
+      if (broke) {
+        markSell(position, broke.sellPrice, broke.soldOn, "Sell — downtrend broke the 50-bar EMA", now);
+        ledgerChanged = true;
       }
-      position = {
-        company: lead.company,
-        signalDate: lead.signalDate,
-        leadFor: lead.leadFor,
-        entryPrice: check.price,
-        previousClose: lead.close,
-        supportPrice,
-        trend: lead.trend,
-        healthState: lead.healthState,
-        pressure: lead.pressure,
-        structureState: lead.structureState,
-        signalLow: low,
-        sellValue: null,
-        sellOn: null,
-        reason: null,
-      };
-      ledger.open.push(position);
-      ledgerChanged = true;
     }
 
-    const daily = sellAfterSignal(history[lead.company] ?? [], lead.signalDate, discovered.closedThrough);
-    if (position.sellValue == null && daily.sell) {
-      position.sellValue = round2(daily.sell.exitClose);
-      position.sellOn = daily.sell.exitDate;
-      position.reason = daily.sell.reason;
-      ledgerChanged = true;
-    }
-    const pierced = position.sellValue == null ? liveSell(quote, position.signalLow ?? low) : null;
-    if (pierced != null) {
-      position.sellValue = pierced;
-      position.sellOn = today;
-      position.reason = "Reversal sell formed — price traded through the signal-day low";
-      ledgerChanged = true;
-    }
-
-    const hours = hourlyBySymbol.get(lead.company) ?? [];
-    const structure = hourlyReversalChart(hours);
-    const live = resistanceState(structure.resistancePrice);
+    const hit = position.confirmLabel ? findUptrendBuy(hours, position.leadFor, now) : null;
+    const mark = hit && hit.state !== "none" ? { from: hit.probeIndex, to: hit.confirmIndex } : null;
+    const structure = hourlyReversalChart(hours, mark);
     const formed = position.sellValue != null;
-    const statusNote = formed ? "Sell — reversal sell formed" : live.statusNote;
-    const lastPrice = quotePrice(quote) ?? daily.last?.close ?? lead.close;
+    const statusNote = formed
+      ? "Sell printed. This lead is no longer monitored and moves to history after 15 min."
+      : "Hold — the 50-bar average has not broken in a downtrend";
+    const lastPrice = quotePrice(quote) ?? lastSessionClose(hours, position.leadFor) ?? position.previousClose;
+    const markedAt = position.sellMarkedAt ? Date.parse(position.sellMarkedAt) : NaN;
 
-    if (position.sellValue != null && position.sellOn && discovered.closedThrough >= position.sellOn) {
+    if (formed && Number.isFinite(markedAt) && now.getTime() >= markedAt + HISTORY_AFTER_SELL_MS) {
       archive(ledger, position, {
-        soldOn: position.sellOn,
+        soldOn: position.sellOn ?? today,
         lastPrice,
         resistancePrice: structure.resistancePrice,
         statusNote,
@@ -523,50 +504,42 @@ export async function assembleForwardBook(
       signalDate: position.signalDate,
       leadFor: position.leadFor,
       entryPrice: position.entryPrice,
-      status: formed ? "SELL" : live.status,
+      status: formed ? "SELL" : "HOLD",
       statusNote,
       resistancePrice: structure.resistancePrice,
       sellValue: position.sellValue,
       lastPrice,
-      trend: daily.last?.trend ?? lead.trend,
+      trend: position.trend,
+      sellMarkedAt: position.sellMarkedAt ?? null,
     });
   }
 
   if (ledgerChanged) saveLedger(ledger);
 
-  const asActive = (lead: FreshLead, entryPrice: number | null): ActiveLead => {
-    const bars = candlesBySymbol.get(lead.company) ?? [];
-    const hours = hourlyBySymbol.get(lead.company) ?? [];
-    const chart = hourlyReversalChart(hours);
-    const live = quotePrice(quoteBySymbol(quotes, nseSymbol(lead.company)));
+  const asActive = (position: OpenLead): ActiveLead => {
+    const lead = leadFromPosition(position, now);
+    const hours = hourlyBySymbol.get(position.company) ?? [];
+    const hit = position.confirmLabel ? findUptrendBuy(hours, position.leadFor, now) : null;
+    const mark = hit && hit.state !== "none" ? { from: hit.probeIndex, to: hit.confirmIndex } : null;
+    const chart = hourlyReversalChart(hours, mark);
+    const live = quotePrice(quoteBySymbol(quotes, nseSymbol(position.company)));
     return {
       ...lead,
-      entryPrice,
-      currentPrice: discovered.marketOpen && live != null ? round2(live) : lead.close,
-      supportPrice: chart.supportPrice,
-      signalLow: signalLow(bars, lead.signalDate),
+      entryPrice: position.entryPrice,
+      currentPrice: live != null ? round2(live) : lastSessionClose(hours, position.leadFor) ?? position.previousClose,
+      supportPrice: position.supportPrice ?? chart.supportPrice,
+      signalLow: position.signalLow,
       candles: chart.candles,
-      chartSource: chartSource(lead.company),
-      chartUrl: chartUrl(lead.company),
+      chartSource: chartSource(position.company),
+      chartUrl: chartUrl(position.company),
     };
   };
-  const leads: ActiveLead[] = stillWaiting.map((lead) => asActive(lead, null));
-  for (const position of ledger.open) {
-    const lead = discovered.leads.find(
-      (row) => row.company === position.company && row.signalDate === position.signalDate,
-    );
-    if (!lead || leads.some((row) => row.company === position.company && row.signalDate === position.signalDate)) {
-      continue;
-    }
-    leads.push(asActive(lead, position.entryPrice));
-  }
+  // Open leads stay on table 1 through the session close, including the 15 minutes
+  // after the sell prints. Archive is what moves them to history.
+  const leads = ledger.open.map((position) => asActive(position));
   leads.sort((a, b) => a.company.localeCompare(b.company));
 
-  const monitoringWithEntry = monitoring.filter((row) =>
-    leads.some(
-      (lead) => lead.company === row.company && lead.signalDate === row.signalDate && lead.entryPrice != null,
-    ),
-  );
+  const monitoringWithEntry = monitoring.filter((row) => row.entryPrice != null);
   monitoringWithEntry.sort((a, b) => {
     if (a.status !== b.status) return a.status === "SELL" ? -1 : 1;
     return a.company.localeCompare(b.company);
@@ -577,9 +550,9 @@ export async function assembleForwardBook(
 
   return {
     asOf,
-    closedThrough: discovered.closedThrough,
-    marketOpen: discovered.marketOpen,
-    awaitingClose: discovered.awaitingClose,
+    closedThrough: clock.closedThrough,
+    marketOpen: clock.marketOpen,
+    awaitingClose: clock.marketOpen,
     freshFrom: FRESH_FROM,
     leads,
     monitoring: monitoringWithEntry,

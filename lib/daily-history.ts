@@ -91,7 +91,7 @@ export type HourBar = DailyBar & {
 const candleCache = new Map<string, { at: number; bars: DailyBar[] }>();
 const hourCache = new Map<string, { at: number; bars: HourBar[] }>();
 const CANDLE_CACHE_MS = 10 * 60 * 1000;
-const HOUR_CACHE_MS = 45 * 1000;
+const HOUR_CACHE_MS = 2 * 60 * 1000;
 
 function istBarStamp(unixSeconds: number) {
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -111,7 +111,7 @@ function istBarStamp(unixSeconds: number) {
 }
 
 async function fetchHourBars(symbol: string): Promise<HourBar[]> {
-  const url = `${env.marketDataBaseUrl}/v8/finance/chart/${encodeURIComponent(symbol)}?range=60d&interval=60m`;
+  const url = `${env.marketDataBaseUrl}/v8/finance/chart/${encodeURIComponent(symbol)}?range=60d&interval=30m`;
   const res = await fetch(url, {
     headers: {
       "User-Agent": env.marketDataUserAgent ?? "Mozilla/5.0",
@@ -176,15 +176,15 @@ export async function fetchNseCandles(tickers: string[]) {
   });
 }
 
-/** One-hour NSE candles. A short cache keeps the lead chart current while the desk polls. */
+/** 30-minute NSE candles. Cached for two minutes so a full-book scan can repeat while the desk polls. */
 export async function fetchNseHourly(tickers: string[]) {
   const now = Date.now();
-  return mapPool(tickers, 4, async (ticker) => {
-    const cached = hourCache.get(ticker);
+  return mapPool(tickers, 6, async (ticker) => {
+    const cached = hourCache.get(`${ticker}:30m`);
     if (cached && now - cached.at < HOUR_CACHE_MS) return { ticker, bars: cached.bars };
     try {
       const bars = await fetchHourBars(`${ticker}.NS`);
-      hourCache.set(ticker, { at: now, bars });
+      hourCache.set(`${ticker}:30m`, { at: now, bars });
       return { ticker, bars };
     } catch {
       return { ticker, bars: [] as HourBar[] };

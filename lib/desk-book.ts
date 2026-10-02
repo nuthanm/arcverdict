@@ -79,15 +79,6 @@ function previousWeekday(iso: string) {
   return date.toISOString().slice(0, 10);
 }
 
-export function nextWeekday(iso: string) {
-  const [year, month, day] = iso.split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  do {
-    date.setUTCDate(date.getUTCDate() + 1);
-  } while (date.getUTCDay() === 0 || date.getUTCDay() === 6);
-  return date.toISOString().slice(0, 10);
-}
-
 /** Cash close is 15:30 IST. Both NSE block-deal windows finish before that. */
 export function lastClosedNseSession(now = new Date()) {
   const { ymd, minutes, weekday } = istParts(now);
@@ -104,13 +95,19 @@ export function leadSessionOpen(iso: string, now = new Date()) {
   return minutes >= 9 * 60 + 15;
 }
 
-/** The lead session has finished. An unconfirmed name should not stay on the book. */
-export function leadSessionClosed(iso: string, now = new Date()) {
-  const { ymd, minutes, weekday } = istParts(now);
-  if (ymd > iso) return true;
-  if (ymd < iso) return false;
-  if (weekday === "Sat" || weekday === "Sun") return false;
-  return minutes >= 15 * 60 + 30;
+export function nseClock(now = new Date()) {
+  const clock = istParts(now);
+  const closed = clock.weekday === "Sat" || clock.weekday === "Sun";
+  const marketOpen = !closed && clock.minutes >= 9 * 60 + 15 && clock.minutes < 15 * 60 + 30;
+  return { ...clock, marketOpen, closedThrough: lastClosedNseSession(now) };
+}
+
+/** Today's session once the open has passed. Null before 9:15, so the prior close cannot seed leads. */
+export function sessionScanDate(now = new Date()) {
+  const clock = istParts(now);
+  if (clock.weekday === "Sat" || clock.weekday === "Sun") return null;
+  if (clock.minutes < 9 * 60 + 15) return null;
+  return clock.ymd;
 }
 
 function isUp(trend: string | null) {
@@ -119,15 +116,6 @@ function isUp(trend: string | null) {
 
 function isDown(trend: string | null) {
   return trend === "Very Strong Distribution" || trend === "Strong Distribution";
-}
-
-/** Workbook R1 entry, and the trend has just turned from non-uptrend into accumulation. */
-function reversalBuy(day: Day, prev: Day | null) {
-  if (!prev) return false;
-  if (day.suggestion !== "POTENTIAL ENTRY") return false;
-  if (!isUp(day.trend)) return false;
-  if (isUp(prev.trend)) return false;
-  return true;
 }
 
 function sellConfirmedDay(day: Day) {
@@ -155,47 +143,6 @@ function closedDays(rows: DailyLifecycleRow[], closedThrough: string): Day[] {
 export type FreshLead = DeskLead & {
   sessionOpen: boolean;
 };
-
-/** Latest reversal buy on or after the fresh-start close. Earlier signals are ignored. */
-export function freshReversalLeads(
-  history: Record<string, DailyLifecycleRow[]>,
-  now = new Date(),
-): { asOf: string | null; closedThrough: string; marketOpen: boolean; awaitingClose: boolean; leads: FreshLead[] } {
-  const closedThrough = lastClosedNseSession(now);
-  const clock = istParts(now);
-  const marketOpen =
-    clock.weekday !== "Sat" &&
-    clock.weekday !== "Sun" &&
-    clock.minutes >= 9 * 60 + 15 &&
-    clock.minutes < 15 * 60 + 30;
-  const awaitingClose = marketOpen;
-  const leads: FreshLead[] = [];
-
-  for (const [company, rows] of Object.entries(history)) {
-    const days = closedDays(rows, closedThrough);
-    let signal: Day | null = null;
-    for (let i = 1; i < days.length; i++) {
-      if (days[i].date < FRESH_FROM) continue;
-      if (reversalBuy(days[i], days[i - 1])) signal = days[i];
-    }
-    if (!signal) continue;
-    const leadFor = nextWeekday(signal.date);
-    leads.push({
-      company,
-      signalDate: signal.date,
-      leadFor,
-      close: signal.close,
-      trend: signal.trend,
-      healthState: signal.healthState,
-      pressure: signal.pressure,
-      structureState: signal.structureState,
-      sessionOpen: leadSessionOpen(leadFor, now),
-    });
-  }
-
-  leads.sort((a, b) => a.company.localeCompare(b.company));
-  return { asOf: null, closedThrough, marketOpen, awaitingClose, leads };
-}
 
 /** First confirmed sell on a session after the signal close. */
 export function sellAfterSignal(rows: DailyLifecycleRow[], signalDate: string, closedThrough: string) {

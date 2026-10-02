@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { CandleSnapshot } from "@/components/CandleSnapshot";
 import type { ActiveLead, HistoricalLead, MonitorLead } from "@/lib/forward-book";
 import { inr } from "@/lib/format";
+
+const HISTORY_AFTER_SELL_MS = 15 * 60 * 1000;
 
 type BookResponse = {
   ok: boolean;
@@ -31,6 +33,36 @@ function NseSymbol({ symbol }: { symbol: string }) {
   );
 }
 
+function remainingMs(markedAt: string) {
+  const marked = Date.parse(markedAt);
+  if (!Number.isFinite(marked)) return 0;
+  return Math.max(0, marked + HISTORY_AFTER_SELL_MS - Date.now());
+}
+
+function HistoryTimer({ markedAt, onElapsed }: { markedAt: string; onElapsed: () => void }) {
+  const [left, setLeft] = useState(() => remainingMs(markedAt));
+  const fired = useRef(false);
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const next = remainingMs(markedAt);
+      setLeft(next);
+      if (next === 0 && !fired.current) {
+        fired.current = true;
+        onElapsed();
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [markedAt, onElapsed]);
+  const total = Math.ceil(left / 1000);
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  return (
+    <span className="mt-1 block font-mono text-[10px] leading-tight text-[var(--sell)]">
+      No longer monitored · history in {String(minutes).padStart(2, "0")}:{String(seconds).padStart(2, "0")}
+    </span>
+  );
+}
+
 function statusClass(status: string) {
   if (status === "SELL") return "text-[var(--sell)]";
   if (status === "HOLD") return "text-[var(--hold)]";
@@ -41,11 +73,16 @@ export function EquitiesDesk() {
   const [data, setData] = useState<BookResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const reloadHistory = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
     let cancelled = false;
+    let pending = false;
 
     async function load() {
+      if (pending) return;
+      pending = true;
       try {
         const res = await fetch("/api/lifecycle", { cache: "no-store" });
         const text = await res.text();
@@ -64,6 +101,7 @@ export function EquitiesDesk() {
       } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Lifecycle book failed");
       } finally {
+        pending = false;
         if (!cancelled) setLoading(false);
       }
     }
@@ -74,7 +112,7 @@ export function EquitiesDesk() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [reloadKey]);
 
   const leads = data?.leads ?? [];
   const monitoring = data?.monitoring ?? [];
@@ -116,14 +154,16 @@ export function EquitiesDesk() {
               Active Leads <span className="text-[var(--muted)]">({leads.length})</span>
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
-              Tomorrow’s reversal buys. Support is the hourly low where price met the 50-hour EMA and the next
-              two hours stayed above it and finished higher. Entry is the first hour’s high once two consecutive
-              strong hours on the lead session print a higher high above that support. Staying above support is not
-              an entry. If support breaks before that pair, or the session ends without it, the lead is removed and
-              is not added to monitoring or history.
+              Uptrend buys only. The daily trend must be Strong Accumulation or Very Strong Accumulation. On the
+              30-minute chart the 50-bar EMA must be rising, and every earlier completed bar of the session must have
+              closed above it. Entry is the high of the first pullback bar whose low tags that average and whose
+              close holds above it. The buy prints when the next completed bar trades through that high, closes
+              above the average, finishes in the top half of its range, and does so on at least average volume.
+              A confirmed lead stays here after the cash session closes. It leaves with the monitoring row 15
+              minutes after the sell price is set.
             </p>
             {leads.length === 0 ? (
-              <p className="mt-3 text-sm text-[var(--muted)]">No active lead for the next session.</p>
+              <p className="mt-3 text-sm text-[var(--muted)]">No active uptrend lead.</p>
             ) : (
               <div className="mt-3 overflow-x-auto border border-[var(--line)] bg-white">
                 <table className="w-full min-w-[1280px] text-left text-sm">
@@ -131,8 +171,8 @@ export function EquitiesDesk() {
                     <tr>
                       <th className="px-3 py-2 font-bold">Candles</th>
                       <th className="px-3 py-2 font-bold">Symbol</th>
-                      <th className="px-3 py-2 font-bold">Signal close</th>
-                      <th className="px-3 py-2 font-bold">Lead for</th>
+                      <th className="px-3 py-2 font-bold">Signal</th>
+                      <th className="px-3 py-2 font-bold">Session</th>
                       <th className="px-3 py-2 font-bold text-right">Entry</th>
                       <th className="px-3 py-2 font-bold text-right">Previous close</th>
                       <th className="px-3 py-2 font-bold text-right">Current</th>
@@ -145,7 +185,7 @@ export function EquitiesDesk() {
                   </thead>
                   <tbody>
                     {leads.map((row) => (
-                      <tr key={row.company} className="border-t border-[var(--line)] align-top">
+                      <tr key={`${row.company}-${row.signalDate}`} className="border-t border-[var(--line)] align-top">
                         <td className="px-3 py-2">
                           <CandleSnapshot
                             symbol={row.company}
@@ -202,11 +242,13 @@ export function EquitiesDesk() {
               <span className="text-[var(--muted)]">({monitoring.length})</span>
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
-              A lead appears here only after two strong lead-session hours print a higher high and that entry is on
-              Active Leads. Resistance is the hourly high
-              where price met the 50-hour EMA after the rally, and only after the next two hours closed below that
-              average and finished lower. Hold until that rejection confirms. Sell once it does. The sell price stays
-              empty until the reversal sell prints, then the row stays here until that session closes.
+              Each Active Lead with an entry price is watched here, and the sell stays blank until the uptrend
+              gives way. Hold while the 50-bar EMA has not been broken by a downtrend. A single dip under that
+              average does not sell. The sell prints when the 50-bar EMA is falling, a completed 30-minute bar
+              closes through it, and a later completed bar closes through it again with a lower high and a lower
+              close, with no close back above the average in between. The sell value is that broken 50-bar EMA.
+              The session close does not remove the row. Once the sell value is filled, a 15-minute timer starts
+              and the lead then moves to history.
             </p>
             {monitoring.length === 0 ? (
               <p className="mt-3 text-sm text-[var(--muted)]">
@@ -234,6 +276,9 @@ export function EquitiesDesk() {
                         <td className={`px-3 py-2 ${statusClass(row.status)}`}>{row.statusNote}</td>
                         <td className="px-3 py-2">
                           <NseSymbol symbol={row.company} />
+                          {row.sellValue != null && row.sellMarkedAt ? (
+                            <HistoryTimer markedAt={row.sellMarkedAt} onElapsed={reloadHistory} />
+                          ) : null}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs">{row.signalDate}</td>
                         <td className="px-3 py-2 font-mono text-xs">{row.leadFor}</td>
@@ -259,7 +304,7 @@ export function EquitiesDesk() {
               Historical Leads provided <span className="text-[var(--muted)]">({historical.length})</span>
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-[var(--muted)]">
-              A lead lands here at the close of the day its reversal sell formed, then leaves the first two tables.
+              A lead lands here 15 minutes after its sell value is filled, then leaves the first two tables.
               Signal and entry come from Active Leads. The sell price comes from the monitoring table.
             </p>
             <div className="mt-3 overflow-x-auto border border-[var(--line)] bg-white">
